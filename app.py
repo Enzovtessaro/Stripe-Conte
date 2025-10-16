@@ -92,7 +92,7 @@ def create_mrr_chart(df):
         ),
         xaxis=dict(
             title="Month",
-            titlefont=dict(size=14, color='#6b7280'),
+            title_font=dict(size=14, color='#6b7280'),
             tickfont=dict(size=12, color='#6b7280'),
             showgrid=True,
             gridcolor='#f3f4f6',
@@ -100,7 +100,7 @@ def create_mrr_chart(df):
         ),
         yaxis=dict(
             title="New MRR ($)",
-            titlefont=dict(size=14, color='#6b7280'),
+            title_font=dict(size=14, color='#6b7280'),
             tickfont=dict(size=12, color='#6b7280'),
             showgrid=True,
             gridcolor='#f3f4f6',
@@ -144,14 +144,14 @@ def create_mrr_line_chart(df):
         ),
         xaxis=dict(
             title="Month",
-            titlefont=dict(size=14, color='#6b7280'),
+            title_font=dict(size=14, color='#6b7280'),
             tickfont=dict(size=12, color='#6b7280'),
             showgrid=True,
             gridcolor='#f3f4f6'
         ),
         yaxis=dict(
             title="New MRR ($)",
-            titlefont=dict(size=14, color='#6b7280'),
+            title_font=dict(size=14, color='#6b7280'),
             tickfont=dict(size=12, color='#6b7280'),
             showgrid=True,
             gridcolor='#f3f4f6',
@@ -236,17 +236,17 @@ def create_customer_trends_chart(df):
         ),
         xaxis=dict(
             title="Month",
-            titlefont=dict(size=14, color='#6b7280'),
+            title_font=dict(size=14, color='#6b7280'),
             tickfont=dict(size=12, color='#6b7280')
         ),
         yaxis=dict(
             title="New Customers",
-            titlefont=dict(size=14, color='#109618'),
+            title_font=dict(size=14, color='#109618'),
             tickfont=dict(size=12, color='#109618')
         ),
         yaxis2=dict(
             title="Total Customers",
-            titlefont=dict(size=14, color='#DC3912'),
+            title_font=dict(size=14, color='#DC3912'),
             tickfont=dict(size=12, color='#DC3912'),
             overlaying='y',
             side='right'
