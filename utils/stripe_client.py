@@ -31,7 +31,7 @@ class StripeClient:
             while has_more:
                 params = {
                     'limit': limit,
-                    'expand': ['data.items.data.price']  # Expand price data
+                    'expand': ['data.items.data.price']  # Expand price data (product info will be fetched separately if needed)
                 }
                 
                 if starting_after:
@@ -47,13 +47,13 @@ class StripeClient:
             
             return subscriptions
             
-        except stripe.error.AuthenticationError:
+        except stripe.AuthenticationError:
             st.error("❌ Invalid Stripe API key. Please check your STRIPE_SECRET_KEY environment variable.")
             return []
-        except stripe.error.PermissionError:
+        except stripe.PermissionError:
             st.error("❌ Insufficient permissions. Please ensure your API key has access to read subscription data.")
             return []
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             st.error(f"❌ Stripe API error: {str(e)}")
             return []
         except Exception as e:
@@ -76,9 +76,47 @@ class StripeClient:
                 expand=['items.data.price', 'customer']
             )
             return subscription
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             st.error(f"Error retrieving subscription {subscription_id}: {str(e)}")
             return {}
+    
+    def get_product(self, product_id: str) -> Dict[Any, Any]:
+        """
+        Get product details from Stripe
+        
+        Args:
+            product_id: The Stripe product ID
+            
+        Returns:
+            Product object with details including name
+        """
+        try:
+            product = stripe.Product.retrieve(product_id)
+            return product
+        except stripe.StripeError as e:
+            print(f"Error retrieving product {product_id}: {str(e)}")
+            return {}
+    
+    def get_products_batch(self, product_ids: List[str]) -> Dict[str, str]:
+        """
+        Get multiple product names from Stripe
+        
+        Args:
+            product_ids: List of Stripe product IDs
+            
+        Returns:
+            Dictionary mapping product_id to product name
+        """
+        product_names = {}
+        
+        for product_id in set(product_ids):  # Use set to avoid duplicates
+            try:
+                product = stripe.Product.retrieve(product_id)
+                product_names[product_id] = product.get('name', product_id)
+            except stripe.StripeError:
+                product_names[product_id] = product_id  # Fallback to ID if can't retrieve
+        
+        return product_names
     
     def test_connection(self) -> bool:
         """
@@ -91,7 +129,7 @@ class StripeClient:
             # Try to retrieve account information
             stripe.Account.retrieve()
             return True
-        except stripe.error.AuthenticationError:
+        except stripe.AuthenticationError:
             return False
         except Exception:
             return False

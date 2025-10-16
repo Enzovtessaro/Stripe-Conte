@@ -38,12 +38,25 @@ def load_revenue_data():
         if not subscriptions:
             return None, "No subscription data found in your Stripe account."
         
+        # Collect unique product IDs from subscriptions to fetch names
+        product_ids = set()
+        for sub in subscriptions:
+            items = sub.get('items', {}).get('data', [])
+            for item in items:
+                price = item.get('price', {})
+                product = price.get('product')
+                if product and isinstance(product, str):
+                    product_ids.add(product)
+        
+        # Fetch product names from Stripe
+        product_names = stripe_client.get_products_batch(list(product_ids)) if product_ids else {}
+        
         # Process the data to calculate all metrics
-        mrr_data = data_processor.calculate_new_mrr_by_month(subscriptions)
+        mrr_data = data_processor.calculate_new_vs_existing_mrr_by_month(subscriptions)
         arr = data_processor.calculate_arr(subscriptions)
         churn_metrics = data_processor.calculate_churn_metrics(subscriptions)
         customer_trends = data_processor.calculate_customer_trends(subscriptions)
-        revenue_by_plan = data_processor.calculate_revenue_by_plan(subscriptions)
+        revenue_by_plan = data_processor.calculate_revenue_by_plan(subscriptions, product_names)
         
         if mrr_data.empty:
             return None, "No MRR data could be calculated from your subscriptions."
@@ -61,31 +74,56 @@ def load_revenue_data():
         return None, f"Error loading data: {str(e)}"
 
 def create_mrr_chart(df):
-    """Create styled bar chart for New MRR per month"""
+    """Create stacked bar chart showing New MRR and Existing MRR"""
     if df.empty:
         return None
     
-    # Create bar chart with Plotly
+    # Create stacked bar chart with Plotly
     fig = go.Figure()
     
-    fig.add_trace(go.Bar(
-        x=df['month'],
-        y=df['new_mrr'],
-        name='New MRR',
-        marker=dict(
-            color='#3366CC',
-            line=dict(color='#3366CC', width=0)
-        ),
-        text=df['new_mrr'].apply(lambda x: f"${x:,.0f}"),
-        textposition='outside',
-        textfont=dict(size=12, color='#333333'),
-        hovertemplate='<b>%{x}</b><br>New MRR: $%{y:,.0f}<extra></extra>'
-    ))
+    # Add Existing MRR bars (bottom of stack)
+    if 'existing_mrr' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['month'],
+            y=df['existing_mrr'],
+            name='Existing MRR',
+            marker=dict(
+                color='#109618',
+                line=dict(color='#109618', width=0)
+            ),
+            hovertemplate='<b>%{x}</b><br>Existing MRR: $%{y:,.0f}<extra></extra>'
+        ))
     
-    # Update layout for modern appearance with rounded corners
+    # Add New MRR bars (top of stack)
+    if 'new_mrr' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['month'],
+            y=df['new_mrr'],
+            name='New MRR',
+            marker=dict(
+                color='#3366CC',
+                line=dict(color='#3366CC', width=0)
+            ),
+            hovertemplate='<b>%{x}</b><br>New MRR: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    # Add total MRR text labels on top of stacked bars
+    if 'total_mrr' in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df['month'],
+            y=df['total_mrr'],
+            mode='text',
+            text=df['total_mrr'].apply(lambda x: f"${x:,.0f}"),
+            textposition='top center',
+            textfont=dict(size=12, color='#333333'),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+    
+    # Update layout for stacked bars
     fig.update_layout(
         title=dict(
-            text="New Monthly Recurring Revenue (MRR)",
+            text="Monthly Recurring Revenue (MRR) - New vs Existing",
             font=dict(size=24, color='#1f2937'),
             x=0.5,
             xanchor='center'
@@ -99,7 +137,7 @@ def create_mrr_chart(df):
             gridwidth=1
         ),
         yaxis=dict(
-            title="New MRR ($)",
+            title="MRR ($)",
             title_font=dict(size=14, color='#6b7280'),
             tickfont=dict(size=12, color='#6b7280'),
             showgrid=True,
@@ -109,11 +147,18 @@ def create_mrr_chart(df):
         ),
         plot_bgcolor='white',
         paper_bgcolor='white',
-        showlegend=False,
+        barmode='stack',
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
         height=500,
-        margin=dict(t=80, b=60, l=80, r=60),
-        bargap=0.3,
-        barcornerradius=8
+        margin=dict(t=100, b=60, l=80, r=60),
+        bargap=0.3
     )
     
     return fig
@@ -125,15 +170,41 @@ def create_mrr_line_chart(df):
     
     fig = go.Figure()
     
-    fig.add_trace(go.Scatter(
-        x=df['month'],
-        y=df['new_mrr'],
-        mode='lines+markers',
-        name='New MRR',
-        line=dict(color='#3366CC', width=3),
-        marker=dict(size=8, color='#3366CC'),
-        hovertemplate='<b>%{x}</b><br>New MRR: $%{y:,.0f}<extra></extra>'
-    ))
+    # Add Total MRR line
+    if 'total_mrr' in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df['month'],
+            y=df['total_mrr'],
+            mode='lines+markers',
+            name='Total MRR',
+            line=dict(color='#DC3912', width=3),
+            marker=dict(size=8, color='#DC3912'),
+            hovertemplate='<b>%{x}</b><br>Total MRR: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    # Add New MRR line
+    if 'new_mrr' in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df['month'],
+            y=df['new_mrr'],
+            mode='lines+markers',
+            name='New MRR',
+            line=dict(color='#3366CC', width=3),
+            marker=dict(size=8, color='#3366CC'),
+            hovertemplate='<b>%{x}</b><br>New MRR: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    # Add Existing MRR line
+    if 'existing_mrr' in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df['month'],
+            y=df['existing_mrr'],
+            mode='lines+markers',
+            name='Existing MRR',
+            line=dict(color='#109618', width=3),
+            marker=dict(size=8, color='#109618'),
+            hovertemplate='<b>%{x}</b><br>Existing MRR: $%{y:,.0f}<extra></extra>'
+        ))
     
     fig.update_layout(
         title=dict(
@@ -150,7 +221,7 @@ def create_mrr_line_chart(df):
             gridcolor='#f3f4f6'
         ),
         yaxis=dict(
-            title="New MRR ($)",
+            title="MRR ($)",
             title_font=dict(size=14, color='#6b7280'),
             tickfont=dict(size=12, color='#6b7280'),
             showgrid=True,
@@ -160,7 +231,14 @@ def create_mrr_line_chart(df):
         plot_bgcolor='white',
         paper_bgcolor='white',
         height=400,
-        margin=dict(t=60, b=40, l=60, r=40)
+        margin=dict(t=60, b=40, l=60, r=40),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
     )
     
     return fig
@@ -313,35 +391,39 @@ def display_key_metrics(mrr_df, arr, churn_metrics):
         return
     
     # Calculate MRR metrics
-    latest_month_mrr = mrr_df['new_mrr'].iloc[-1] if not mrr_df.empty else 0
-    previous_month_mrr = mrr_df['new_mrr'].iloc[-2] if len(mrr_df) > 1 else 0
+    latest_month_total_mrr = mrr_df['total_mrr'].iloc[-1] if 'total_mrr' in mrr_df.columns and not mrr_df.empty else 0
+    previous_month_total_mrr = mrr_df['total_mrr'].iloc[-2] if 'total_mrr' in mrr_df.columns and len(mrr_df) > 1 else 0
+    latest_month_new_mrr = mrr_df['new_mrr'].iloc[-1] if 'new_mrr' in mrr_df.columns and not mrr_df.empty else 0
     
     # Calculate month-over-month growth
-    if previous_month_mrr > 0:
-        growth_rate = ((latest_month_mrr - previous_month_mrr) / previous_month_mrr) * 100
+    if previous_month_total_mrr > 0:
+        growth_rate = ((latest_month_total_mrr - previous_month_total_mrr) / previous_month_total_mrr) * 100
     else:
-        growth_rate = 0 if latest_month_mrr == 0 else 100
-    
-    # Calculate total MRR (sum of all new MRR)
-    total_mrr = mrr_df['new_mrr'].sum()
+        growth_rate = 0 if latest_month_total_mrr == 0 else 100
     
     # Display metrics in columns
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric(
-            label="Current Month New MRR",
-            value=f"${latest_month_mrr:,.0f}",
+            label="Current Month Total MRR",
+            value=f"${latest_month_total_mrr:,.0f}",
             delta=f"{growth_rate:+.1f}%" if growth_rate != 0 else None
         )
     
     with col2:
         st.metric(
+            label="Current Month New MRR",
+            value=f"${latest_month_new_mrr:,.0f}"
+        )
+    
+    with col3:
+        st.metric(
             label="Annual Recurring Revenue",
             value=f"${arr:,.0f}"
         )
     
-    with col3:
+    with col4:
         st.metric(
             label="Churn Rate",
             value=f"{churn_metrics['churn_rate']:.1f}%",
@@ -349,16 +431,10 @@ def display_key_metrics(mrr_df, arr, churn_metrics):
             delta_color="inverse"
         )
     
-    with col4:
+    with col5:
         st.metric(
             label="Active Customers",
             value=f"{churn_metrics['active_count']:,}"
-        )
-    
-    with col5:
-        st.metric(
-            label="Total New MRR",
-            value=f"${total_mrr:,.0f}"
         )
 
 def main():
@@ -496,13 +572,13 @@ def main():
         
         with col1:
             st.markdown("#### Month-over-Month Comparison")
-            current_mrr = filtered_mrr_data['new_mrr'].iloc[-1]
-            previous_mrr = filtered_mrr_data['new_mrr'].iloc[-2]
+            current_mrr = filtered_mrr_data['total_mrr'].iloc[-1] if 'total_mrr' in filtered_mrr_data.columns else 0
+            previous_mrr = filtered_mrr_data['total_mrr'].iloc[-2] if 'total_mrr' in filtered_mrr_data.columns else 0
             mom_change = current_mrr - previous_mrr
             mom_pct = (mom_change / previous_mrr * 100) if previous_mrr > 0 else 0
             
             st.metric(
-                label="Latest Month vs Previous",
+                label="Latest Month vs Previous (Total MRR)",
                 value=f"${current_mrr:,.0f}",
                 delta=f"${mom_change:+,.0f} ({mom_pct:+.1f}%)"
             )
@@ -510,13 +586,13 @@ def main():
         with col2:
             st.markdown("#### Year-over-Year Comparison")
             if len(filtered_mrr_data) >= 13:
-                current_mrr = filtered_mrr_data['new_mrr'].iloc[-1]
-                year_ago_mrr = filtered_mrr_data['new_mrr'].iloc[-13]
+                current_mrr = filtered_mrr_data['total_mrr'].iloc[-1] if 'total_mrr' in filtered_mrr_data.columns else 0
+                year_ago_mrr = filtered_mrr_data['total_mrr'].iloc[-13] if 'total_mrr' in filtered_mrr_data.columns else 0
                 yoy_change = current_mrr - year_ago_mrr
                 yoy_pct = (yoy_change / year_ago_mrr * 100) if year_ago_mrr > 0 else 0
                 
                 st.metric(
-                    label="Latest Month vs Year Ago",
+                    label="Latest Month vs Year Ago (Total MRR)",
                     value=f"${current_mrr:,.0f}",
                     delta=f"${yoy_change:+,.0f} ({yoy_pct:+.1f}%)"
                 )
@@ -527,16 +603,31 @@ def main():
     
     # Display raw data table
     with st.expander("📋 View Raw MRR Data"):
+        display_columns = {
+            "month": "Month"
+        }
+        
+        if 'new_mrr' in filtered_mrr_data.columns:
+            display_columns["new_mrr"] = st.column_config.NumberColumn(
+                "New MRR ($)",
+                format="$%.0f"
+            )
+        
+        if 'existing_mrr' in filtered_mrr_data.columns:
+            display_columns["existing_mrr"] = st.column_config.NumberColumn(
+                "Existing MRR ($)",
+                format="$%.0f"
+            )
+        
+        if 'total_mrr' in filtered_mrr_data.columns:
+            display_columns["total_mrr"] = st.column_config.NumberColumn(
+                "Total MRR ($)",
+                format="$%.0f"
+            )
+        
         st.dataframe(
             filtered_mrr_data,
-            column_config={
-                "month": "Month",
-                "new_mrr": st.column_config.NumberColumn(
-                    "New MRR ($)",
-                    format="$%.0f"
-                ),
-                "subscription_count": "New Subscriptions"
-            },
+            column_config=display_columns,
             hide_index=True,
             use_container_width=True
         )

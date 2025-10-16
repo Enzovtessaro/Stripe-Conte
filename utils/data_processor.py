@@ -299,17 +299,119 @@ class DataProcessor:
             st.error(f"Error calculating customer trends: {str(e)}")
             return pd.DataFrame()
     
-    def calculate_revenue_by_plan(self, subscriptions: List[Dict[Any, Any]]) -> pd.DataFrame:
+    def calculate_new_vs_existing_mrr_by_month(self, subscriptions: List[Dict[Any, Any]]) -> pd.DataFrame:
         """
-        Calculate revenue breakdown by plan/product
+        Calculate New MRR vs Existing MRR by month
         
         Args:
             subscriptions: List of Stripe subscription objects
             
         Returns:
+            DataFrame with columns: month, new_mrr, existing_mrr, total_mrr
+        """
+        if not subscriptions:
+            return pd.DataFrame()
+        
+        try:
+            from dateutil.relativedelta import relativedelta
+            
+            subscription_data = []
+            
+            for sub in subscriptions:
+                created_date = datetime.fromtimestamp(sub.get('created', 0))
+                canceled_at = sub.get('canceled_at')
+                canceled_date = datetime.fromtimestamp(canceled_at) if canceled_at else None
+                status = sub.get('status')
+                mrr_amount = self._calculate_subscription_mrr(sub)
+                
+                if mrr_amount > 0:
+                    subscription_data.append({
+                        'subscription_id': sub.get('id'),
+                        'created_date': created_date,
+                        'canceled_date': canceled_date,
+                        'status': status,
+                        'mrr_amount': mrr_amount
+                    })
+            
+            if not subscription_data:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(subscription_data)
+            
+            all_months = set()
+            for _, row in df.iterrows():
+                created_month = row['created_date'].replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                all_months.add(created_month)
+                
+                if row['canceled_date']:
+                    canceled_month = row['canceled_date'].replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    current = created_month
+                    while current <= canceled_month:
+                        all_months.add(current)
+                        current = current + relativedelta(months=1)
+                else:
+                    current = created_month
+                    now = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    while current <= now:
+                        all_months.add(current)
+                        current = current + relativedelta(months=1)
+            
+            monthly_results = []
+            
+            for month in sorted(all_months):
+                month_end = month + relativedelta(months=1) - timedelta(seconds=1)
+                new_mrr = 0
+                existing_mrr = 0
+                
+                for _, row in df.iterrows():
+                    created_date = row['created_date']
+                    canceled_date = row['canceled_date']
+                    mrr = row['mrr_amount']
+                    
+                    is_active_in_month = (
+                        created_date <= month_end and
+                        (not canceled_date or canceled_date >= month)
+                    )
+                    
+                    if is_active_in_month:
+                        created_month = created_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                        if created_month == month:
+                            new_mrr += mrr
+                        else:
+                            existing_mrr += mrr
+                
+                monthly_results.append({
+                    'month_date': month,
+                    'new_mrr': round(new_mrr, 2),
+                    'existing_mrr': round(existing_mrr, 2),
+                    'total_mrr': round(new_mrr + existing_mrr, 2)
+                })
+            
+            result_df = pd.DataFrame(monthly_results)
+            result_df = result_df.sort_values('month_date')
+            result_df['month'] = result_df['month_date'].dt.strftime('%b %Y')
+            
+            return result_df[['month', 'new_mrr', 'existing_mrr', 'total_mrr']].copy()
+            
+        except Exception as e:
+            st.error(f"Error calculating new vs existing MRR: {str(e)}")
+            return pd.DataFrame()
+    
+    def calculate_revenue_by_plan(self, subscriptions: List[Dict[Any, Any]], product_names: Dict[str, str] = None) -> pd.DataFrame:
+        """
+        Calculate revenue breakdown by plan/product
+        
+        Args:
+            subscriptions: List of Stripe subscription objects
+            product_names: Optional dictionary mapping product IDs to product names
+            
+        Returns:
             DataFrame with revenue by plan
         """
         try:
+            if product_names is None:
+                product_names = {}
+            
             plan_data = []
             
             for sub in subscriptions:
@@ -320,12 +422,22 @@ class DataProcessor:
                 
                 for item in items:
                     price = item.get('price', {})
-                    product_id = price.get('product', 'Unknown')
+                    product = price.get('product', {})
+                    
+                    # Determine product name
+                    if isinstance(product, dict):
+                        # Product was expanded, use the name from it
+                        product_name = product.get('name', 'Unknown Product')
+                    elif isinstance(product, str):
+                        # Product is an ID, look up the name from product_names map
+                        product_name = product_names.get(product, product)
+                    else:
+                        product_name = 'Unknown Product'
                     
                     mrr = self._calculate_subscription_mrr({'items': {'data': [item]}})
                     
                     plan_data.append({
-                        'product_id': product_id,
+                        'product_name': product_name,
                         'mrr': mrr
                     })
             
@@ -334,7 +446,7 @@ class DataProcessor:
             
             df = pd.DataFrame(plan_data)
             
-            plan_summary = df.groupby('product_id').agg({
+            plan_summary = df.groupby('product_name').agg({
                 'mrr': 'sum'
             }).reset_index()
             
