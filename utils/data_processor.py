@@ -169,3 +169,181 @@ class DataProcessor:
                 'month_over_month_growth': 0,
                 'total_new_mrr': 0
             }
+    
+    def calculate_arr(self, subscriptions: List[Dict[Any, Any]]) -> float:
+        """
+        Calculate Annual Recurring Revenue (ARR)
+        
+        Args:
+            subscriptions: List of Stripe subscription objects
+            
+        Returns:
+            Total ARR
+        """
+        total_arr = 0
+        
+        for sub in subscriptions:
+            if sub.get('status') in ['active', 'trialing']:
+                mrr = self._calculate_subscription_mrr(sub)
+                total_arr += mrr * 12
+        
+        return round(total_arr, 2)
+    
+    def calculate_churn_metrics(self, subscriptions: List[Dict[Any, Any]]) -> Dict[str, Any]:
+        """
+        Calculate churn rate and related metrics
+        
+        Args:
+            subscriptions: List of Stripe subscription objects
+            
+        Returns:
+            Dictionary with churn metrics (churn for current month period)
+        """
+        try:
+            from datetime import datetime
+            from dateutil.relativedelta import relativedelta
+            
+            current_date = datetime.now()
+            start_of_current_month = current_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            
+            active_start_of_month = 0
+            active_current = 0
+            churned_this_month = 0
+            
+            for sub in subscriptions:
+                created_date = datetime.fromtimestamp(sub.get('created', 0))
+                canceled_date = None
+                
+                if sub.get('canceled_at'):
+                    canceled_date = datetime.fromtimestamp(sub.get('canceled_at'))
+                
+                was_active_at_month_start = (
+                    created_date < start_of_current_month and
+                    (not canceled_date or canceled_date >= start_of_current_month)
+                )
+                
+                is_active_now = (
+                    created_date < current_date and
+                    (not canceled_date or canceled_date >= current_date)
+                )
+                
+                if was_active_at_month_start:
+                    active_start_of_month += 1
+                    
+                    if not is_active_now and canceled_date and start_of_current_month <= canceled_date < current_date:
+                        churned_this_month += 1
+                
+                if is_active_now:
+                    active_current += 1
+            
+            churn_rate = (churned_this_month / active_start_of_month * 100) if active_start_of_month > 0 else 0
+            
+            return {
+                'churn_rate': round(churn_rate, 2),
+                'churned_count': churned_this_month,
+                'active_count': active_current,
+                'previous_active_count': active_start_of_month
+            }
+            
+        except Exception as e:
+            return {
+                'churn_rate': 0,
+                'churned_count': 0,
+                'active_count': 0,
+                'previous_active_count': 0
+            }
+    
+    def calculate_customer_trends(self, subscriptions: List[Dict[Any, Any]]) -> pd.DataFrame:
+        """
+        Calculate customer count trends by month
+        
+        Args:
+            subscriptions: List of Stripe subscription objects
+            
+        Returns:
+            DataFrame with customer counts by month
+        """
+        try:
+            customer_data = []
+            
+            for sub in subscriptions:
+                created_date = datetime.fromtimestamp(sub.get('created', 0))
+                month_year = created_date.strftime('%Y-%m')
+                
+                customer_data.append({
+                    'month_year': month_year,
+                    'customer_id': sub.get('customer'),
+                    'created_date': created_date
+                })
+            
+            if not customer_data:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(customer_data)
+            
+            monthly_customers = df.groupby('month_year').agg({
+                'customer_id': 'count'
+            }).reset_index()
+            
+            monthly_customers.columns = ['month_year', 'new_customers']
+            
+            monthly_customers['month_date'] = pd.to_datetime(monthly_customers['month_year'])
+            monthly_customers = monthly_customers.sort_values('month_date')
+            
+            monthly_customers['month'] = monthly_customers['month_date'].dt.strftime('%b %Y')
+            monthly_customers['cumulative_customers'] = monthly_customers['new_customers'].cumsum()
+            
+            return monthly_customers[['month', 'new_customers', 'cumulative_customers']]
+            
+        except Exception as e:
+            st.error(f"Error calculating customer trends: {str(e)}")
+            return pd.DataFrame()
+    
+    def calculate_revenue_by_plan(self, subscriptions: List[Dict[Any, Any]]) -> pd.DataFrame:
+        """
+        Calculate revenue breakdown by plan/product
+        
+        Args:
+            subscriptions: List of Stripe subscription objects
+            
+        Returns:
+            DataFrame with revenue by plan
+        """
+        try:
+            plan_data = []
+            
+            for sub in subscriptions:
+                if sub.get('status') not in ['active', 'trialing']:
+                    continue
+                
+                items = sub.get('items', {}).get('data', [])
+                
+                for item in items:
+                    price = item.get('price', {})
+                    product_id = price.get('product', 'Unknown')
+                    
+                    mrr = self._calculate_subscription_mrr({'items': {'data': [item]}})
+                    
+                    plan_data.append({
+                        'product_id': product_id,
+                        'mrr': mrr
+                    })
+            
+            if not plan_data:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(plan_data)
+            
+            plan_summary = df.groupby('product_id').agg({
+                'mrr': 'sum'
+            }).reset_index()
+            
+            plan_summary.columns = ['plan', 'mrr']
+            plan_summary = plan_summary.sort_values('mrr', ascending=False)
+            plan_summary['percentage'] = (plan_summary['mrr'] / plan_summary['mrr'].sum() * 100).round(2)
+            
+            return plan_summary
+            
+        except Exception as e:
+            st.error(f"Error calculating revenue by plan: {str(e)}")
+            return pd.DataFrame()
