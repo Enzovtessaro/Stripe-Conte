@@ -4,8 +4,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
+from dotenv import load_dotenv
 from utils.stripe_client import StripeClient
 from utils.data_processor import DataProcessor
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure page
 st.set_page_config(
@@ -14,6 +18,222 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Minimalist CSS styling - 3 colors only: white, gray, and accent
+st.markdown("""
+<style>
+    /* Import clean, minimalist font */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+    
+    /* Color palette: White (#FFFFFF), Gray (#6B7280), Accent (#3B82F6) */
+    
+    /* Global styles */
+    .main {
+        padding: 2rem 0;
+        background: #FFFFFF;
+    }
+    
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Clean header */
+    .dashboard-header {
+        background: #FFFFFF;
+        padding: 3rem 0 2rem 0;
+        margin: -1rem -1rem 3rem -1rem;
+        border-bottom: 1px solid #F3F4F6;
+    }
+    
+    .dashboard-header h1 {
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        font-size: 2.5rem;
+        color: #111827;
+        margin: 0;
+        text-align: center;
+    }
+    
+    .dashboard-header p {
+        font-family: 'Inter', sans-serif;
+        font-weight: 400;
+        font-size: 1.1rem;
+        color: #6B7280;
+        margin: 0.5rem 0 0 0;
+        text-align: center;
+    }
+    
+    /* Metric cards - clean and minimal */
+    .metric-container {
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        transition: border-color 0.2s ease;
+    }
+    
+    .metric-container:hover {
+        border-color: #3B82F6;
+    }
+    
+    .metric-value {
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        font-size: 2rem;
+        color: #111827;
+        margin: 0;
+    }
+    
+    .metric-label {
+        font-family: 'Inter', sans-serif;
+        font-weight: 500;
+        font-size: 0.875rem;
+        color: #6B7280;
+        margin: 0.5rem 0 0 0;
+        text-transform: uppercase;
+        letter-spacing: 0.025em;
+    }
+    
+    .metric-delta {
+        font-family: 'Inter', sans-serif;
+        font-weight: 500;
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+    }
+    
+    /* Buttons - solid, no borders */
+    .stButton > button {
+        background: #3B82F6;
+        color: #FFFFFF;
+        border: none;
+        border-radius: 6px;
+        padding: 0.75rem 1.5rem;
+        font-family: 'Inter', sans-serif;
+        font-weight: 500;
+        font-size: 0.875rem;
+        transition: background-color 0.2s ease;
+    }
+    
+    .stButton > button:hover {
+        background: #2563EB;
+    }
+    
+    /* Tabs - clean and minimal */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0;
+        border-bottom: 1px solid #E5E7EB;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        background: #FFFFFF;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 1rem 1.5rem;
+        font-family: 'Inter', sans-serif;
+        font-weight: 500;
+        color: #6B7280;
+        transition: all 0.2s ease;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: #FFFFFF;
+        color: #3B82F6;
+        border-bottom-color: #3B82F6;
+    }
+    
+    /* Section headers */
+    .section-title {
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        font-size: 1.25rem;
+        color: #111827;
+        margin: 2rem 0 1rem 0;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #E5E7EB;
+    }
+    
+    /* Form elements */
+    .stSelectbox > div > div {
+        border: 1px solid #D1D5DB;
+        border-radius: 6px;
+        background: #FFFFFF;
+    }
+    
+    .stSelectbox > div > div:focus-within {
+        border-color: #3B82F6;
+    }
+    
+    .stDateInput > div > div {
+        border: 1px solid #D1D5DB;
+        border-radius: 6px;
+        background: #FFFFFF;
+    }
+    
+    .stDateInput > div > div:focus-within {
+        border-color: #3B82F6;
+    }
+    
+    /* Charts container */
+    .chart-wrapper {
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+    }
+    
+    /* Data tables */
+    .stDataFrame {
+        border: 1px solid #E5E7EB;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    
+    /* Alerts and info boxes */
+    .stAlert {
+        border: 1px solid #E5E7EB;
+        border-radius: 8px;
+        background: #FFFFFF;
+    }
+    
+    /* Expander */
+    .streamlit-expanderHeader {
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 6px;
+        font-family: 'Inter', sans-serif;
+        font-weight: 500;
+    }
+    
+    /* Loading spinner */
+    .stSpinner > div {
+        border-top-color: #3B82F6;
+    }
+    
+    /* Responsive design */
+    @media (max-width: 768px) {
+        .dashboard-header h1 {
+            font-size: 2rem;
+        }
+        .metric-value {
+            font-size: 1.5rem;
+        }
+    }
+    
+    /* Subtle animations */
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    
+    .fade-in {
+        animation: fadeIn 0.3s ease-out;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Initialize clients
 @st.cache_resource
@@ -120,33 +340,37 @@ def create_mrr_chart(df):
             hoverinfo='skip'
         ))
     
-    # Update layout for stacked bars
+    # Update layout for minimalist design
     fig.update_layout(
         title=dict(
-            text="Monthly Recurring Revenue (MRR) - New vs Existing",
-            font=dict(size=24, color='#1f2937'),
+            text="Monthly Recurring Revenue",
+            font=dict(size=18, color='#111827', family='Inter'),
             x=0.5,
             xanchor='center'
         ),
         xaxis=dict(
             title="Month",
-            title_font=dict(size=14, color='#6b7280'),
-            tickfont=dict(size=12, color='#6b7280'),
+            title_font=dict(size=12, color='#6B7280', family='Inter'),
+            tickfont=dict(size=11, color='#6B7280', family='Inter'),
             showgrid=True,
-            gridcolor='#f3f4f6',
-            gridwidth=1
+            gridcolor='#E5E7EB',
+            gridwidth=1,
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
         yaxis=dict(
             title="MRR ($)",
-            title_font=dict(size=14, color='#6b7280'),
-            tickfont=dict(size=12, color='#6b7280'),
+            title_font=dict(size=12, color='#6B7280', family='Inter'),
+            tickfont=dict(size=11, color='#6B7280', family='Inter'),
             showgrid=True,
-            gridcolor='#f3f4f6',
+            gridcolor='#E5E7EB',
             gridwidth=1,
-            tickformat='$,.0f'
+            tickformat='$,.0f',
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
         barmode='stack',
         showlegend=True,
         legend=dict(
@@ -154,11 +378,12 @@ def create_mrr_chart(df):
             yanchor="bottom",
             y=1.02,
             xanchor="right",
-            x=1
+            x=1,
+            font=dict(family='Inter', size=11, color='#6B7280')
         ),
-        height=500,
-        margin=dict(t=100, b=60, l=80, r=60),
-        bargap=0.3
+        height=400,
+        margin=dict(t=60, b=40, l=60, r=40),
+        bargap=0.2
     )
     
     return fig
@@ -208,28 +433,32 @@ def create_mrr_line_chart(df):
     
     fig.update_layout(
         title=dict(
-            text="MRR Trend Over Time",
-            font=dict(size=20, color='#1f2937'),
+            text="Growth Trends",
+            font=dict(size=18, color='#111827', family='Inter'),
             x=0.5,
             xanchor='center'
         ),
         xaxis=dict(
             title="Month",
-            title_font=dict(size=14, color='#6b7280'),
-            tickfont=dict(size=12, color='#6b7280'),
+            title_font=dict(size=12, color='#6B7280', family='Inter'),
+            tickfont=dict(size=11, color='#6B7280', family='Inter'),
             showgrid=True,
-            gridcolor='#f3f4f6'
+            gridcolor='#E5E7EB',
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
         yaxis=dict(
             title="MRR ($)",
-            title_font=dict(size=14, color='#6b7280'),
-            tickfont=dict(size=12, color='#6b7280'),
+            title_font=dict(size=12, color='#6B7280', family='Inter'),
+            tickfont=dict(size=11, color='#6B7280', family='Inter'),
             showgrid=True,
-            gridcolor='#f3f4f6',
-            tickformat='$,.0f'
+            gridcolor='#E5E7EB',
+            tickformat='$,.0f',
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
         height=400,
         margin=dict(t=60, b=40, l=60, r=40),
         legend=dict(
@@ -237,7 +466,8 @@ def create_mrr_line_chart(df):
             yanchor="bottom",
             y=1.02,
             xanchor="right",
-            x=1
+            x=1,
+            font=dict(family='Inter', size=11, color='#6B7280')
         )
     )
     
@@ -259,8 +489,8 @@ def create_revenue_pie_chart(df):
     
     fig.update_layout(
         title=dict(
-            text="Revenue by Plan/Product",
-            font=dict(size=20, color='#1f2937'),
+            text="Revenue by Plan",
+            font=dict(size=18, color='#111827', family='Inter'),
             x=0.5,
             xanchor='center'
         ),
@@ -272,7 +502,8 @@ def create_revenue_pie_chart(df):
             yanchor="middle",
             y=0.5,
             xanchor="left",
-            x=1.05
+            x=1.05,
+            font=dict(family='Inter', size=11, color='#6B7280')
         )
     )
     
@@ -307,30 +538,39 @@ def create_customer_trends_chart(df):
     
     fig.update_layout(
         title=dict(
-            text="Customer Growth Trends",
-            font=dict(size=20, color='#1f2937'),
+            text="Customer Insights",
+            font=dict(size=18, color='#111827', family='Inter'),
             x=0.5,
             xanchor='center'
         ),
         xaxis=dict(
             title="Month",
-            title_font=dict(size=14, color='#6b7280'),
-            tickfont=dict(size=12, color='#6b7280')
+            title_font=dict(size=12, color='#6B7280', family='Inter'),
+            tickfont=dict(size=11, color='#6B7280', family='Inter'),
+            showgrid=True,
+            gridcolor='#E5E7EB',
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
         yaxis=dict(
             title="New Customers",
-            title_font=dict(size=14, color='#109618'),
-            tickfont=dict(size=12, color='#109618')
+            title_font=dict(size=12, color='#6B7280', family='Inter'),
+            tickfont=dict(size=11, color='#6B7280', family='Inter'),
+            showgrid=True,
+            gridcolor='#E5E7EB',
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
         yaxis2=dict(
             title="Total Customers",
-            title_font=dict(size=14, color='#DC3912'),
-            tickfont=dict(size=12, color='#DC3912'),
+            title_font=dict(size=12, color='#6B7280', family='Inter'),
+            tickfont=dict(size=11, color='#6B7280', family='Inter'),
             overlaying='y',
-            side='right'
+            side='right',
+            showgrid=False
         ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
         height=400,
         margin=dict(t=60, b=40, l=60, r=60),
         legend=dict(
@@ -338,7 +578,8 @@ def create_customer_trends_chart(df):
             yanchor="bottom",
             y=1.02,
             xanchor="right",
-            x=1
+            x=1,
+            font=dict(family='Inter', size=11, color='#6B7280')
         )
     )
     
@@ -401,48 +642,59 @@ def display_key_metrics(mrr_df, arr, churn_metrics):
     else:
         growth_rate = 0 if latest_month_total_mrr == 0 else 100
     
-    # Display metrics in columns
+    # Display metrics in columns with minimalist styling
     col1, col2, col3, col4, col5 = st.columns(5)
     
-    with col1:
-        st.metric(
-            label="Current Month Total MRR",
-            value=f"${latest_month_total_mrr:,.0f}",
-            delta=f"{growth_rate:+.1f}%" if growth_rate != 0 else None
-        )
+    metrics_data = [
+        {
+            "label": "Total MRR",
+            "value": f"${latest_month_total_mrr:,.0f}",
+            "delta": f"{growth_rate:+.1f}%" if growth_rate != 0 else None
+        },
+        {
+            "label": "New MRR",
+            "value": f"${latest_month_new_mrr:,.0f}",
+            "delta": None
+        },
+        {
+            "label": "Annual Revenue",
+            "value": f"${arr:,.0f}",
+            "delta": None
+        },
+        {
+            "label": "Churn Rate",
+            "value": f"{churn_metrics['churn_rate']:.1f}%",
+            "delta": f"-{churn_metrics['churned_count']} customers" if churn_metrics['churned_count'] > 0 else "0 churned"
+        },
+        {
+            "label": "Active Customers",
+            "value": f"{churn_metrics['active_count']:,}",
+            "delta": None
+        }
+    ]
     
-    with col2:
-        st.metric(
-            label="Current Month New MRR",
-            value=f"${latest_month_new_mrr:,.0f}"
-        )
+    columns = [col1, col2, col3, col4, col5]
     
-    with col3:
-        st.metric(
-            label="Annual Recurring Revenue",
-            value=f"${arr:,.0f}"
-        )
-    
-    with col4:
-        st.metric(
-            label="Churn Rate",
-            value=f"{churn_metrics['churn_rate']:.1f}%",
-            delta=f"-{churn_metrics['churned_count']} customers" if churn_metrics['churned_count'] > 0 else "0 churned",
-            delta_color="inverse"
-        )
-    
-    with col5:
-        st.metric(
-            label="Active Customers",
-            value=f"{churn_metrics['active_count']:,}"
-        )
+    for col, metric in zip(columns, metrics_data):
+        with col:
+            st.markdown(f"""
+            <div class="metric-container fade-in">
+                <div class="metric-value">{metric['value']}</div>
+                <div class="metric-label">{metric['label']}</div>
+                {f'<div class="metric-delta" style="color: #6B7280;">{metric["delta"]}</div>' if metric['delta'] else ''}
+            </div>
+            """, unsafe_allow_html=True)
 
 def main():
     """Main application function"""
     
-    # Header
-    st.title("📊 Revenue Dashboard")
-    st.markdown("### Comprehensive Revenue Analytics from Stripe")
+    # Clean minimalist header
+    st.markdown("""
+    <div class="dashboard-header fade-in">
+        <h1>Revenue Dashboard</h1>
+        <p>Comprehensive analytics from Stripe</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Add refresh button and date filter
     col1, col2, col3 = st.columns([1, 2, 2])
@@ -501,37 +753,42 @@ def main():
     )
     
     # Display key metrics
-    st.markdown("### Key Metrics Overview")
+    st.markdown('<h2 class="section-title fade-in">Key Metrics</h2>', unsafe_allow_html=True)
     display_key_metrics(filtered_mrr_data, arr, churn_metrics)
     
     st.markdown("---")
     
     # Chart selection tabs
     tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 MRR Bar Chart", 
-        "📈 MRR Trend Line", 
-        "🥧 Revenue by Plan", 
-        "👥 Customer Trends"
+        "MRR Analysis", 
+        "Growth Trends", 
+        "Revenue by Plan", 
+        "Customer Insights"
     ])
     
     with tab1:
-        st.markdown("### New Monthly Recurring Revenue")
+        st.markdown('<div class="chart-wrapper fade-in">', unsafe_allow_html=True)
+        st.markdown("### Monthly Recurring Revenue")
         chart = create_mrr_chart(filtered_mrr_data)
         if chart:
             st.plotly_chart(chart, use_container_width=True)
         else:
             st.error("Unable to generate chart from the available data.")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with tab2:
-        st.markdown("### MRR Growth Over Time")
+        st.markdown('<div class="chart-wrapper fade-in">', unsafe_allow_html=True)
+        st.markdown("### Growth Trends")
         line_chart = create_mrr_line_chart(filtered_mrr_data)
         if line_chart:
             st.plotly_chart(line_chart, use_container_width=True)
         else:
             st.info("Not enough data to display trend line.")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with tab3:
-        st.markdown("### Revenue Distribution by Plan/Product")
+        st.markdown('<div class="chart-wrapper fade-in">', unsafe_allow_html=True)
+        st.markdown("### Revenue by Plan")
         if not revenue_by_plan.empty:
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -552,39 +809,45 @@ def main():
                 )
         else:
             st.info("No plan data available.")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with tab4:
-        st.markdown("### Customer Acquisition & Growth")
+        st.markdown('<div class="chart-wrapper fade-in">', unsafe_allow_html=True)
+        st.markdown("### Customer Insights")
         if not filtered_customer_trends.empty:
             customer_chart = create_customer_trends_chart(filtered_customer_trends)
             if customer_chart:
                 st.plotly_chart(customer_chart, use_container_width=True)
         else:
             st.info("No customer trend data available.")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown("---")
     
     # Comparison views
-    st.markdown("### 📊 Period Comparisons")
+    st.markdown('<h2 class="section-title fade-in">Period Comparisons</h2>', unsafe_allow_html=True)
     
     if len(filtered_mrr_data) >= 2:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("#### Month-over-Month Comparison")
+            st.markdown('<div class="chart-wrapper fade-in">', unsafe_allow_html=True)
+            st.markdown("#### Month-over-Month")
             current_mrr = filtered_mrr_data['total_mrr'].iloc[-1] if 'total_mrr' in filtered_mrr_data.columns else 0
             previous_mrr = filtered_mrr_data['total_mrr'].iloc[-2] if 'total_mrr' in filtered_mrr_data.columns else 0
             mom_change = current_mrr - previous_mrr
             mom_pct = (mom_change / previous_mrr * 100) if previous_mrr > 0 else 0
             
             st.metric(
-                label="Latest Month vs Previous (Total MRR)",
+                label="Latest Month vs Previous",
                 value=f"${current_mrr:,.0f}",
                 delta=f"${mom_change:+,.0f} ({mom_pct:+.1f}%)"
             )
+            st.markdown('</div>', unsafe_allow_html=True)
         
         with col2:
-            st.markdown("#### Year-over-Year Comparison")
+            st.markdown('<div class="chart-wrapper fade-in">', unsafe_allow_html=True)
+            st.markdown("#### Year-over-Year")
             if len(filtered_mrr_data) >= 13:
                 current_mrr = filtered_mrr_data['total_mrr'].iloc[-1] if 'total_mrr' in filtered_mrr_data.columns else 0
                 year_ago_mrr = filtered_mrr_data['total_mrr'].iloc[-13] if 'total_mrr' in filtered_mrr_data.columns else 0
@@ -592,12 +855,13 @@ def main():
                 yoy_pct = (yoy_change / year_ago_mrr * 100) if year_ago_mrr > 0 else 0
                 
                 st.metric(
-                    label="Latest Month vs Year Ago (Total MRR)",
+                    label="Latest Month vs Year Ago",
                     value=f"${current_mrr:,.0f}",
                     delta=f"${yoy_change:+,.0f} ({yoy_pct:+.1f}%)"
                 )
             else:
                 st.info("Need at least 13 months of data for YoY comparison")
+            st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("Need at least 2 months of data for period comparisons")
     
@@ -632,12 +896,13 @@ def main():
             use_container_width=True
         )
     
-    # Footer
+    # Minimalist footer
     st.markdown("---")
-    st.markdown(
-        "**Data Source:** Stripe API | **Last Updated:** " + 
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem 0; color: #6B7280; font-family: 'Inter', sans-serif; font-size: 0.875rem;">
+        Data Source: Stripe API | Last Updated: """ + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + """
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
