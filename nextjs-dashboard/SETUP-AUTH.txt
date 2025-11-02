@@ -1,0 +1,27 @@
+========================================
+DASHBOARD AUTHENTICATION SETUP
+========================================
+
+Create a file named ".env.local" in the nextjs-dashboard directory with the following content:
+
+# Dashboard Access Password (server-side only)
+DASHBOARD_PASSWORD=Vale0610!
+
+# Secret key for session encryption
+SESSION_SECRET=your-super-secret-session-key-change-in-production
+
+# Your existing Stripe key
+STRIPE_SECRET_KEY=sk_test_your_stripe_key_here
+
+========================================
+
+After creating the .env.local file, restart your development server:
+
+npm run dev
+
+Then navigate to: http://localhost:3000
+
+You will be prompted to enter the password: Vale0610!
+
+========================================
+
