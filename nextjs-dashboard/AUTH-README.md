@@ -55,3 +55,6 @@ The dashboard password is: **Vale0610!**
 
 To change it, update the `DASHBOARD_PASSWORD` value in `.env.local` and restart the development server.
 
+
+
+

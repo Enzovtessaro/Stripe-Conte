@@ -53,6 +53,10 @@ export interface DailyPayout {
   dateObj: Date;
   amount: number;
   count: number;
+  stripeAmount?: number;
+  stripeCount?: number;
+  pixAmount?: number;
+  pixCount?: number;
 }
 
 export interface SubscriptionRecord {
@@ -425,7 +429,10 @@ export class DataProcessor {
   }
 
   calculateDailyPayouts(payouts: Stripe.Payout[]): DailyPayout[] {
-    const dailyData = new Map<string, { amount: number; count: number }>();
+    const dailyData = new Map<
+      string,
+      { amount: number; count: number; stripeAmount: number; stripeCount: number }
+    >();
 
     // Process payouts by arrival date
     for (const payout of payouts) {
@@ -433,9 +440,13 @@ export class DataProcessor {
         const date = new Date(payout.arrival_date * 1000);
         const dateKey = format(date, 'yyyy-MM-dd');
         
-        const existing = dailyData.get(dateKey) || { amount: 0, count: 0 };
-        existing.amount += payout.amount / 100;
+        const existing =
+          dailyData.get(dateKey) || { amount: 0, count: 0, stripeAmount: 0, stripeCount: 0 };
+        const payoutAmount = payout.amount / 100;
+        existing.amount += payoutAmount;
         existing.count += 1;
+        existing.stripeAmount += payoutAmount;
+        existing.stripeCount += 1;
         dailyData.set(dateKey, existing);
       }
     }
@@ -449,6 +460,10 @@ export class DataProcessor {
         dateObj,
         amount: Math.round(data.amount * 100) / 100,
         count: data.count,
+        stripeAmount: Math.round(data.stripeAmount * 100) / 100,
+        stripeCount: data.stripeCount,
+        pixAmount: 0,
+        pixCount: 0,
       });
     }
 

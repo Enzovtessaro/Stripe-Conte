@@ -1,8 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { RefreshCw, Calendar, LogOut } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { RefreshCw, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -56,7 +55,6 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState('all');
-  const router = useRouter();
 
   const fetchData = async () => {
     setLoading(true);
@@ -79,18 +77,6 @@ export default function Home() {
   useEffect(() => {
     fetchData();
   }, []);
-
-  const handleLogout = async () => {
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-      });
-      router.push('/login');
-      router.refresh();
-    } catch (err) {
-      console.error('Logout error:', err);
-    }
-  };
 
   const filterDataByDateRange = (
     mrrData: MonthlyMRR[],
@@ -237,10 +223,6 @@ export default function Home() {
               <Button onClick={fetchData} size="sm" className="gap-1 md:gap-2 text-xs md:text-sm">
                 <RefreshCw className="h-3 w-3 md:h-4 md:w-4" />
                 <span className="hidden sm:inline">Atualizar</span>
-              </Button>
-              <Button onClick={handleLogout} variant="outline" size="sm" className="gap-1 md:gap-2 text-xs md:text-sm">
-                <LogOut className="h-3 w-3 md:h-4 md:w-4" />
-                <span className="hidden sm:inline">Sair</span>
               </Button>
             </div>
           </div>

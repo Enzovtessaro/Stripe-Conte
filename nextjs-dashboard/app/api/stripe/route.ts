@@ -9,6 +9,17 @@ import {
 } from '@/lib/stripe';
 import { DataProcessor } from '@/lib/data-processor';
 import { subMonths } from 'date-fns';
+import { getPixMetrics } from '@/lib/pix-processor';
+import {
+  mergeChurnMetrics,
+  mergeCustomerTrends,
+  mergeDailyPayouts,
+  mergeFinancialMetrics,
+  mergeMonthlyFinancials,
+  mergeMRRData,
+  mergeRevenueByPlan,
+  mergeSubscriptionRecords,
+} from '@/lib/metrics-merger';
 
 export async function GET() {
   try {
@@ -47,25 +58,48 @@ export async function GET() {
 
     // Process the data
     const processor = new DataProcessor();
-    const mrrData = processor.calculateNewVsExistingMRR(subscriptions);
-    const arr = processor.calculateARR(subscriptions);
-    const churnMetrics = processor.calculateChurnMetrics(subscriptions);
-    const customerTrends = processor.calculateCustomerTrends(subscriptions);
-    const revenueByPlan = processor.calculateRevenueByPlan(subscriptions, productNames);
+    const stripeMRR = processor.calculateNewVsExistingMRR(subscriptions);
+    const stripeARR = processor.calculateARR(subscriptions);
+    const stripeChurn = processor.calculateChurnMetrics(subscriptions);
+    const stripeCustomerTrends = processor.calculateCustomerTrends(subscriptions);
+    const stripeRevenueByPlan = processor.calculateRevenueByPlan(subscriptions, productNames);
+    
+    const pixMetrics = getPixMetrics();
+
+    const mrrData = mergeMRRData(stripeMRR, pixMetrics.mrrData);
+    const customerTrends = mergeCustomerTrends(stripeCustomerTrends, pixMetrics.customerTrends);
+    const revenueByPlan = mergeRevenueByPlan(stripeRevenueByPlan, pixMetrics.revenueByPlan);
+    const churnMetrics = mergeChurnMetrics(stripeChurn, pixMetrics.churnSnapshot);
+    const arr = Math.round((stripeARR + pixMetrics.arr) * 100) / 100;
+    const totalSubscriptionsCount = subscriptions.length + pixMetrics.totalSubscriptions;
     
     // Process financial metrics
-    const financialMetrics = processor.calculateFinancialMetrics(
+    const financialMetricsStripe = processor.calculateFinancialMetrics(
       balanceTransactions,
       payouts,
       balance
     );
-    const monthlyFinancials = processor.calculateMonthlyFinancials(
+    const monthlyFinancialsStripe = processor.calculateMonthlyFinancials(
       balanceTransactions,
       payouts
     );
-    const dailyPayouts = processor.calculateDailyPayouts(payouts);
-    const subscriptionRecords = processor.processSubscriptionRecords(invoices);
+    const dailyPayoutsStripe = processor.calculateDailyPayouts(payouts);
+    const subscriptionRecordsStripe = processor.processSubscriptionRecords(invoices);
     const failedPayments = processor.processFailedPayments(invoices);
+    
+    const financialMetrics = mergeFinancialMetrics(
+      financialMetricsStripe,
+      pixMetrics.financialMetrics
+    );
+    const monthlyFinancials = mergeMonthlyFinancials(
+      monthlyFinancialsStripe,
+      pixMetrics.monthlyFinancials
+    );
+    const dailyPayouts = mergeDailyPayouts(dailyPayoutsStripe, pixMetrics.dailyPayouts);
+    const subscriptionRecords = mergeSubscriptionRecords(
+      subscriptionRecordsStripe,
+      pixMetrics.subscriptionRecords
+    );
 
     return NextResponse.json({
       mrrData,
@@ -73,7 +107,7 @@ export async function GET() {
       churnMetrics,
       customerTrends,
       revenueByPlan,
-      subscriptionsCount: subscriptions.length,
+      subscriptionsCount: totalSubscriptionsCount,
       financialMetrics,
       monthlyFinancials,
       dailyPayouts,
