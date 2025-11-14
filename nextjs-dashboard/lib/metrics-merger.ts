@@ -239,8 +239,10 @@ export function mergeDailyPayouts(
 
   const accumulate = (entry: DailyPayout, source: 'stripe' | 'pix') => {
     const key = entry.dateObj.toISOString();
-    const existing =
-      dayMap.get(key) || {
+    let existing = dayMap.get(key);
+    
+    if (!existing) {
+      existing = {
         date: entry.date,
         dateObj: entry.dateObj,
         amount: 0,
@@ -250,23 +252,25 @@ export function mergeDailyPayouts(
         pixAmount: 0,
         pixCount: 0,
       };
+      dayMap.set(key, existing);
+    }
 
     existing.amount = Math.round((existing.amount + entry.amount) * 100) / 100;
     existing.count += entry.count;
 
     if (source === 'stripe') {
+      const entryAmount = entry.stripeAmount ?? entry.amount;
       existing.stripeAmount = Math.round(
-        (existing.stripeAmount + (entry.stripeAmount ?? entry.amount)) * 100
+        ((existing.stripeAmount ?? 0) + entryAmount) * 100
       ) / 100;
-      existing.stripeCount += entry.stripeCount ?? entry.count;
+      existing.stripeCount = (existing.stripeCount ?? 0) + (entry.stripeCount ?? entry.count);
     } else {
+      const entryAmount = entry.pixAmount ?? entry.amount;
       existing.pixAmount = Math.round(
-        (existing.pixAmount + (entry.pixAmount ?? entry.amount)) * 100
+        ((existing.pixAmount ?? 0) + entryAmount) * 100
       ) / 100;
-      existing.pixCount += entry.pixCount ?? entry.count;
+      existing.pixCount = (existing.pixCount ?? 0) + (entry.pixCount ?? entry.count);
     }
-
-    dayMap.set(key, existing);
   };
 
   for (const item of stripeDaily) {
