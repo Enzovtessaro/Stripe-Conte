@@ -1,0 +1,314 @@
+import { differenceInDays, format, parseISO, startOfMonth } from 'date-fns';
+import type {
+  CustomerTrend,
+  DailyPayout,
+  FinancialMetrics,
+  MonthlyFinancials,
+  MonthlyMRR,
+  PlanRevenue,
+  SubscriptionRecord,
+} from './data-processor';
+import type { AbacateCustomer, AbacatePixCharge } from './abacate';
+
+const MONTH_FORMAT = 'yyyy-MM';
+const DEFAULT_PLAN_LABEL = 'PIX Abacate Pay';
+
+// A PIX subscriber pays monthly. Anyone whose last payment is older than this
+// window is treated as churned, since Abacate has no subscription object here.
+const ACTIVE_WINDOW_DAYS = 45;
+
+export interface AbacateMetrics {
+  mrrData: MonthlyMRR[];
+  customerTrends: CustomerTrend[];
+  revenueByPlan: PlanRevenue[];
+  churnSnapshot: { activeCount: number; inactiveCount: number };
+  arr: number;
+  totalSubscriptions: number;
+  dailyPayouts: DailyPayout[];
+  monthlyFinancials: MonthlyFinancials[];
+  financialMetrics: FinancialMetrics;
+  subscriptionRecords: SubscriptionRecord[];
+  firstPaymentDate: Date | null;
+}
+
+interface NormalizedPayment {
+  chargeId: string;
+  customerKey: string;
+  customerName: string;
+  customerEmail: string;
+  plan: string;
+  amount: number;
+  fee: number;
+  paidAt: Date;
+}
+
+function readMetadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  keys: string[]
+): string | null {
+  if (!metadata) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function normalizePayments(
+  charges: AbacatePixCharge[],
+  customers: AbacateCustomer[]
+): NormalizedPayment[] {
+  const customerById = new Map(customers.map((customer) => [customer.id, customer]));
+
+  return charges
+    .filter((charge) => charge.status === 'PAID' && !charge.devMode)
+    .map((charge) => {
+      const linkedCustomer = charge.customer ?? (charge.customerId ? customerById.get(charge.customerId) : undefined);
+
+      const customerName =
+        linkedCustomer?.name?.trim() ||
+        readMetadataString(charge.metadata, ['customerName', 'name']) ||
+        charge.description?.trim() ||
+        'Cliente PIX';
+
+      const customerEmail = linkedCustomer?.email?.trim() || 'N/A';
+
+      const plan =
+        readMetadataString(charge.metadata, ['plan', 'planType', 'plano']) ||
+        charge.description?.trim() ||
+        DEFAULT_PLAN_LABEL;
+
+      // `updatedAt` is when the charge flipped to PAID; `createdAt` is when the QR was issued.
+      const paidAt = parseISO(charge.updatedAt || charge.createdAt);
+
+      return {
+        chargeId: charge.id,
+        customerKey:
+          linkedCustomer?.id ||
+          (customerEmail !== 'N/A' ? customerEmail : customerName),
+        customerName,
+        customerEmail,
+        plan,
+        amount: charge.amount / 100,
+        fee: (charge.platformFee ?? 0) / 100,
+        paidAt,
+      };
+    })
+    .filter((payment) => !Number.isNaN(payment.paidAt.getTime()))
+    .sort((a, b) => a.paidAt.getTime() - b.paidAt.getTime());
+}
+
+// Customers migrated from the manual PIX sheet already count as acquired there.
+// Their Abacate revenue still counts; only the "new customer" flag is suppressed
+// so the cumulative customer line does not count the same company twice.
+export function normalizeCustomerName(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/\b(LTDA|ME|MEI|EIRELI|EPP|SA|S\/A)\b/g, '')
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+// First day Abacate Pay actually settled money, used as the cutover point for
+// the manual PIX records.
+export function getFirstPaidDate(charges: AbacatePixCharge[]): Date | null {
+  const paidDates = charges
+    .filter((charge) => charge.status === 'PAID' && !charge.devMode)
+    .map((charge) => parseISO(charge.updatedAt || charge.createdAt))
+    .filter((date) => !Number.isNaN(date.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  return paidDates.length > 0 ? paidDates[0] : null;
+}
+
+export function getAbacateMetrics(
+  charges: AbacatePixCharge[],
+  customers: AbacateCustomer[],
+  referenceDate: Date = new Date(),
+  alreadyCountedCustomerNames: string[] = []
+): AbacateMetrics {
+  const migratedCustomers = new Set(alreadyCountedCustomerNames.map(normalizeCustomerName));
+  const payments = normalizePayments(charges, customers);
+
+  const monthMap = new Map<string, { monthDate: Date; newMRR: number; existingMRR: number }>();
+  const customerMonthMap = new Map<string, { monthDate: Date; count: number }>();
+  const dailyMap = new Map<string, { date: Date; amount: number; count: number }>();
+  const monthlyFinancialMap = new Map<
+    string,
+    { monthDate: Date; gross: number; fees: number }
+  >();
+  const paymentsPerCustomer = new Map<string, number>();
+  const lastPaymentByCustomer = new Map<
+    string,
+    { paidAt: Date; amount: number; plan: string }
+  >();
+  const subscriptionRecords: SubscriptionRecord[] = [];
+
+  let grossRevenue = 0;
+  let totalFees = 0;
+
+  for (const payment of payments) {
+    const installmentNumber = (paymentsPerCustomer.get(payment.customerKey) || 0) + 1;
+    paymentsPerCustomer.set(payment.customerKey, installmentNumber);
+    lastPaymentByCustomer.set(payment.customerKey, {
+      paidAt: payment.paidAt,
+      amount: payment.amount,
+      plan: payment.plan,
+    });
+
+    grossRevenue += payment.amount;
+    totalFees += payment.fee;
+
+    const monthDate = startOfMonth(payment.paidAt);
+    const monthKey = format(monthDate, MONTH_FORMAT);
+
+    const monthEntry = monthMap.get(monthKey) || { monthDate, newMRR: 0, existingMRR: 0 };
+    if (installmentNumber === 1) {
+      monthEntry.newMRR += payment.amount;
+    } else {
+      monthEntry.existingMRR += payment.amount;
+    }
+    monthMap.set(monthKey, monthEntry);
+
+    if (installmentNumber === 1 && !migratedCustomers.has(normalizeCustomerName(payment.customerName))) {
+      const trendEntry = customerMonthMap.get(monthKey) || { monthDate, count: 0 };
+      trendEntry.count += 1;
+      customerMonthMap.set(monthKey, trendEntry);
+    }
+
+    const monthlyEntry = monthlyFinancialMap.get(monthKey) || { monthDate, gross: 0, fees: 0 };
+    monthlyEntry.gross += payment.amount;
+    monthlyEntry.fees += payment.fee;
+    monthlyFinancialMap.set(monthKey, monthlyEntry);
+
+    const dayKey = format(payment.paidAt, 'yyyy-MM-dd');
+    // Local midnight, matching the other processors, so every source lands on the
+    // same Date key and merges into one bar per day.
+    const dailyEntry = dailyMap.get(dayKey) || {
+      date: new Date(`${dayKey}T00:00:00`),
+      amount: 0,
+      count: 0,
+    };
+    dailyEntry.amount += payment.amount;
+    dailyEntry.count += 1;
+    dailyMap.set(dayKey, dailyEntry);
+
+    subscriptionRecords.push({
+      customerName: payment.customerName,
+      customerEmail: payment.customerEmail,
+      amount: Math.round(payment.amount * 100) / 100,
+      date: payment.paidAt,
+      installmentNumber,
+      invoiceId: payment.chargeId,
+    });
+  }
+
+  const mrrData: MonthlyMRR[] = Array.from(monthMap.values())
+    .map((entry) => ({
+      month: format(entry.monthDate, 'MMM yyyy'),
+      monthDate: entry.monthDate,
+      newMRR: round(entry.newMRR),
+      existingMRR: round(entry.existingMRR),
+      totalMRR: round(entry.newMRR + entry.existingMRR),
+    }))
+    .sort((a, b) => a.monthDate.getTime() - b.monthDate.getTime());
+
+  let cumulative = 0;
+  const customerTrends: CustomerTrend[] = Array.from(customerMonthMap.values())
+    .sort((a, b) => a.monthDate.getTime() - b.monthDate.getTime())
+    .map((entry) => {
+      cumulative += entry.count;
+      return {
+        month: format(entry.monthDate, 'MMM yyyy'),
+        monthDate: entry.monthDate,
+        newCustomers: entry.count,
+        cumulativeCustomers: cumulative,
+      };
+    });
+
+  // Current recurring value per plan = the latest amount each active customer paid.
+  const planMap = new Map<string, number>();
+  let activeCount = 0;
+  let inactiveCount = 0;
+  let activeMRR = 0;
+
+  for (const last of Array.from(lastPaymentByCustomer.values())) {
+    const isActive = differenceInDays(referenceDate, last.paidAt) <= ACTIVE_WINDOW_DAYS;
+
+    if (isActive) {
+      activeCount += 1;
+      activeMRR += last.amount;
+      planMap.set(last.plan, (planMap.get(last.plan) || 0) + last.amount);
+    } else {
+      inactiveCount += 1;
+    }
+  }
+
+  const planTotal = Array.from(planMap.values()).reduce((sum, value) => sum + value, 0);
+  const revenueByPlan: PlanRevenue[] = Array.from(planMap.entries())
+    .map(([plan, mrr]) => ({
+      plan,
+      mrr: round(mrr),
+      percentage: planTotal > 0 ? Math.round((mrr / planTotal) * 100 * 100) / 100 : 0,
+    }))
+    .sort((a, b) => b.mrr - a.mrr);
+
+  const dailyPayouts: DailyPayout[] = Array.from(dailyMap.values())
+    .map((entry) => ({
+      date: format(entry.date, 'dd/MM/yyyy'),
+      dateObj: entry.date,
+      amount: round(entry.amount),
+      count: entry.count,
+      stripeAmount: 0,
+      stripeCount: 0,
+      pixAmount: round(entry.amount),
+      pixCount: entry.count,
+    }))
+    .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
+
+  const monthlyFinancials: MonthlyFinancials[] = Array.from(monthlyFinancialMap.values())
+    .map((entry) => ({
+      month: format(entry.monthDate, 'MMM yyyy'),
+      monthDate: entry.monthDate,
+      grossRevenue: round(entry.gross),
+      stripeFees: round(entry.fees),
+      netRevenue: round(entry.gross - entry.fees),
+      payouts: round(entry.gross - entry.fees),
+    }))
+    .sort((a, b) => a.monthDate.getTime() - b.monthDate.getTime());
+
+  const financialMetrics: FinancialMetrics = {
+    grossRevenue: round(grossRevenue),
+    stripeFees: round(totalFees),
+    netRevenue: round(grossRevenue - totalFees),
+    totalPayouts: round(grossRevenue - totalFees),
+    pendingBalance: 0,
+    availableBalance: 0,
+    feePercentage: grossRevenue > 0 ? Math.round((totalFees / grossRevenue) * 100 * 100) / 100 : 0,
+  };
+
+  return {
+    mrrData,
+    customerTrends,
+    revenueByPlan,
+    churnSnapshot: { activeCount, inactiveCount },
+    arr: round(activeMRR * 12),
+    totalSubscriptions: lastPaymentByCustomer.size,
+    dailyPayouts,
+    monthlyFinancials,
+    financialMetrics,
+    subscriptionRecords: subscriptionRecords.sort((a, b) => b.date.getTime() - a.date.getTime()),
+    firstPaymentDate: payments.length > 0 ? payments[0].paidAt : null,
+  };
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}

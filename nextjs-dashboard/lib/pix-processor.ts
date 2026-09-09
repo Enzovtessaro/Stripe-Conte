@@ -36,13 +36,25 @@ export interface PixMetrics {
   monthlyFinancials: MonthlyFinancials[];
   financialMetrics: FinancialMetrics;
   subscriptionRecords: SubscriptionRecord[];
+  customerNames: string[];
 }
 
 const pixSubscriptions = pixSubscriptionsData as PixSubscription[];
 
 const MONTH_FORMAT = 'yyyy-MM';
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
+// `cutoffDate` is the first day Abacate Pay has real data for. Manual records
+// only synthesise payments up to the day before it, and stop contributing the
+// "current state" metrics (active subscriptions, ARR, plan mix) entirely —
+// from the cutoff on, Abacate Pay is the source of truth for the same customers.
+export function getPixMetrics(
+  referenceDate: Date = new Date(),
+  cutoffDate: Date | null = null
+): PixMetrics {
+  const lastSyntheticDate = cutoffDate
+    ? new Date(Math.min(cutoffDate.getTime() - DAY_IN_MS, referenceDate.getTime()))
+    : referenceDate;
   const monthMap = new Map<string, { monthDate: Date; newMRR: number; existingMRR: number }>();
   const customerMonthMap = new Map<string, number>();
   const planMap = new Map<string, number>();
@@ -83,7 +95,7 @@ export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
     let installmentNumber = 1;
     let paymentDate = new Date(startDate);
 
-    while (paymentDate <= referenceDate) {
+    while (paymentDate <= lastSyntheticDate) {
       grossRevenue += subscription.amount;
 
       const monthDate = startOfMonth(paymentDate);
@@ -106,7 +118,8 @@ export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
       monthlyFinancialMap.set(monthKey, monthlyEntry);
 
       const dayKey = format(paymentDate, 'yyyy-MM-dd');
-      const dailyEntry = dailyMap.get(dayKey) || { date: new Date(paymentDate), amount: 0, count: 0 };
+      const dailyEntry =
+        dailyMap.get(dayKey) || { date: new Date(`${dayKey}T00:00:00`), amount: 0, count: 0 };
       dailyEntry.amount += subscription.amount;
       dailyEntry.count += 1;
       dailyMap.set(dayKey, dailyEntry);
@@ -202,6 +215,8 @@ export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
     }))
     .sort((a, b) => a.monthDate.getTime() - b.monthDate.getTime());
 
+  const supersededByAbacate = cutoffDate !== null;
+
   const financialMetrics: FinancialMetrics = {
     grossRevenue: Math.round(grossRevenue * 100) / 100,
     stripeFees: 0,
@@ -222,17 +237,17 @@ export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
   return {
     mrrData,
     customerTrends,
-    revenueByPlan: normalizedRevenueByPlan,
-    churnSnapshot: {
-      activeCount,
-      inactiveCount,
-    },
-    arr: Math.round(arr * 100) / 100,
-    totalSubscriptions: pixSubscriptions.length,
+    revenueByPlan: supersededByAbacate ? [] : normalizedRevenueByPlan,
+    churnSnapshot: supersededByAbacate
+      ? { activeCount: 0, inactiveCount: 0 }
+      : { activeCount, inactiveCount },
+    arr: supersededByAbacate ? 0 : Math.round(arr * 100) / 100,
+    totalSubscriptions: supersededByAbacate ? 0 : pixSubscriptions.length,
     dailyPayouts,
     monthlyFinancials,
     financialMetrics,
     subscriptionRecords: sortedSubscriptionRecords,
+    customerNames: pixSubscriptions.map((subscription) => subscription.customerName),
   };
 }
 

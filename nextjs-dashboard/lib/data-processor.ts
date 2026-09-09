@@ -454,7 +454,7 @@ export class DataProcessor {
     // Convert to array and sort
     const results: DailyPayout[] = [];
     for (const [dateKey, data] of Array.from(dailyData.entries())) {
-      const dateObj = new Date(dateKey);
+      const dateObj = new Date(`${dateKey}T00:00:00`);
       results.push({
         date: format(dateObj, 'dd/MM/yyyy'),
         dateObj,

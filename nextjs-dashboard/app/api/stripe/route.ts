@@ -10,6 +10,8 @@ import {
 import { DataProcessor } from '@/lib/data-processor';
 import { subMonths } from 'date-fns';
 import { getPixMetrics } from '@/lib/pix-processor';
+import { getAbacateData } from '@/lib/abacate';
+import { getAbacateMetrics, getFirstPaidDate } from '@/lib/abacate-processor';
 import {
   mergeChurnMetrics,
   mergeCustomerTrends,
@@ -68,14 +70,41 @@ export async function GET() {
     const stripeCustomerTrends = processor.calculateCustomerTrends(subscriptions);
     const stripeRevenueByPlan = processor.calculateRevenueByPlan(subscriptions, productNames);
     
-    const pixMetrics = getPixMetrics();
+    // Abacate Pay is the live source for PIX. The manual records in
+    // data/pix-subscriptions.json only cover the period before Abacate had data,
+    // so the same customer is never counted on both sides.
+    const abacate = await getAbacateData();
+    const abacateCutoff = getFirstPaidDate(abacate.charges);
 
-    const mrrData = mergeMRRData(stripeMRR, pixMetrics.mrrData);
-    const customerTrends = mergeCustomerTrends(stripeCustomerTrends, pixMetrics.customerTrends);
-    const revenueByPlan = mergeRevenueByPlan(stripeRevenueByPlan, pixMetrics.revenueByPlan);
-    const churnMetrics = mergeChurnMetrics(stripeChurn, pixMetrics.churnSnapshot);
-    const arr = Math.round((stripeARR + pixMetrics.arr) * 100) / 100;
-    const totalSubscriptionsCount = subscriptions.length + pixMetrics.totalSubscriptions;
+    const pixMetrics = getPixMetrics(new Date(), abacateCutoff);
+    const abacateMetrics = getAbacateMetrics(
+      abacate.charges,
+      abacate.customers,
+      new Date(),
+      pixMetrics.customerNames
+    );
+
+    const pixMRR = mergeMRRData(pixMetrics.mrrData, abacateMetrics.mrrData);
+    const pixCustomerTrends = mergeCustomerTrends(
+      pixMetrics.customerTrends,
+      abacateMetrics.customerTrends
+    );
+    const pixRevenueByPlan = mergeRevenueByPlan(
+      pixMetrics.revenueByPlan,
+      abacateMetrics.revenueByPlan
+    );
+
+    const mrrData = mergeMRRData(stripeMRR, pixMRR);
+    const customerTrends = mergeCustomerTrends(stripeCustomerTrends, pixCustomerTrends);
+    const revenueByPlan = mergeRevenueByPlan(stripeRevenueByPlan, pixRevenueByPlan);
+    const churnMetrics = mergeChurnMetrics(stripeChurn, {
+      activeCount: pixMetrics.churnSnapshot.activeCount + abacateMetrics.churnSnapshot.activeCount,
+      inactiveCount:
+        pixMetrics.churnSnapshot.inactiveCount + abacateMetrics.churnSnapshot.inactiveCount,
+    });
+    const arr = Math.round((stripeARR + pixMetrics.arr + abacateMetrics.arr) * 100) / 100;
+    const totalSubscriptionsCount =
+      subscriptions.length + pixMetrics.totalSubscriptions + abacateMetrics.totalSubscriptions;
     
     // Process financial metrics
     const financialMetricsStripe = processor.calculateFinancialMetrics(
@@ -92,17 +121,21 @@ export async function GET() {
     const failedPayments = processor.processFailedPayments(invoices);
     
     const financialMetrics = mergeFinancialMetrics(
-      financialMetricsStripe,
-      pixMetrics.financialMetrics
+      mergeFinancialMetrics(financialMetricsStripe, pixMetrics.financialMetrics),
+      abacateMetrics.financialMetrics
     );
     const monthlyFinancials = mergeMonthlyFinancials(
       monthlyFinancialsStripe,
-      pixMetrics.monthlyFinancials
+      mergeMonthlyFinancials(pixMetrics.monthlyFinancials, abacateMetrics.monthlyFinancials)
     );
-    const dailyPayouts = mergeDailyPayouts(dailyPayoutsStripe, pixMetrics.dailyPayouts);
+    // Both PIX sources share the same series in the chart, so they are tagged together.
+    const dailyPayouts = mergeDailyPayouts(dailyPayoutsStripe, [
+      ...pixMetrics.dailyPayouts,
+      ...abacateMetrics.dailyPayouts,
+    ]);
     const subscriptionRecords = mergeSubscriptionRecords(
       subscriptionRecordsStripe,
-      pixMetrics.subscriptionRecords
+      mergeSubscriptionRecords(pixMetrics.subscriptionRecords, abacateMetrics.subscriptionRecords)
     );
 
     return NextResponse.json(
