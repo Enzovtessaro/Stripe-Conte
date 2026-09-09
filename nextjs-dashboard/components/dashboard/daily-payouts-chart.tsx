@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import {
   BarChart,
   Bar,
@@ -11,6 +12,13 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { DailyPayout } from '@/lib/data-processor';
 import { formatCurrency } from '@/lib/utils';
 
@@ -18,14 +26,39 @@ interface DailyPayoutsChartProps {
   data: DailyPayout[];
 }
 
+const RANGE_OPTIONS = [
+  { value: '7', label: 'Últimos 7 dias' },
+  { value: '30', label: 'Últimos 30 dias' },
+  { value: '90', label: 'Últimos 90 dias' },
+  { value: '365', label: 'Último ano' },
+] as const;
+
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
 export function DailyPayoutsChart({ data }: DailyPayoutsChartProps) {
-  const chartData = data.map((item) => ({
-    date: item.date,
-    stripeAmount: item.stripeAmount ?? 0,
-    pixAmount: item.pixAmount ?? 0,
-    stripeCount: item.stripeCount ?? 0,
-    pixCount: item.pixCount ?? 0,
-  }));
+  // 30 dias por padrão: o período inteiro passa de 250 barras e os rótulos do
+  // eixo viram um borrão.
+  const [rangeDays, setRangeDays] = useState('30');
+
+  const chartData = useMemo(() => {
+    // dateObj chega como string ISO depois do JSON da rota, não como Date.
+    const cutoff = Date.now() - Number(rangeDays) * DAY_IN_MS;
+
+    return data
+      .filter((item) => new Date(item.dateObj).getTime() >= cutoff)
+      .map((item) => ({
+        date: item.date,
+        stripeAmount: item.stripeAmount ?? 0,
+        pixAmount: item.pixAmount ?? 0,
+        stripeCount: item.stripeCount ?? 0,
+        pixCount: item.pixCount ?? 0,
+      }));
+  }, [data, rangeDays]);
+
+  const total = useMemo(
+    () => chartData.reduce((sum, item) => sum + item.stripeAmount + item.pixAmount, 0),
+    [chartData]
+  );
 
   const CustomTooltip = ({
     active,
@@ -82,8 +115,29 @@ export function DailyPayoutsChart({ data }: DailyPayoutsChartProps) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Transferências Bancárias Diárias</CardTitle>
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+        <div>
+          <CardTitle>Transferências Bancárias Diárias</CardTitle>
+          <p className="text-xs md:text-sm text-muted-foreground mt-1">
+            {chartData.length > 0
+              ? `${formatCurrency(total)} em ${chartData.length} ${
+                  chartData.length === 1 ? 'dia' : 'dias'
+                } com movimento`
+              : 'Nenhuma transferência no período'}
+          </p>
+        </div>
+        <Select value={rangeDays} onValueChange={setRangeDays}>
+          <SelectTrigger className="w-[150px] md:w-[170px] text-xs md:text-sm shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {RANGE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={400}>
