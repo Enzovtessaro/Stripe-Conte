@@ -34,6 +34,14 @@ export function isAbacateConfigured(): boolean {
   return Boolean(process.env.ABACATE_PAY_API_KEY);
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A v2 responde 400 genérico (sem mensagem) quando está sob throttle, não só em
+// requisição malformada — visto em produção com a mesma URL que funcionava
+// segundos antes. Como não dá para distinguir pelo status, vale retentar.
+const RETRY_STATUSES = new Set([400, 408, 429, 500, 502, 503, 504]);
+const RETRY_DELAYS_MS = [1000, 3000, 6000];
+
 async function abacateGet<T>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
   const apiKey = process.env.ABACATE_PAY_API_KEY;
 
@@ -48,16 +56,26 @@ async function abacateGet<T>(path: string, params: Record<string, string | numbe
     }
   }
 
-  const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: 'application/json',
-    },
-    cache: 'no-store',
-  });
+  let response: Response | null = null;
 
-  if (!response.ok) {
-    throw new Error(`Abacate Pay ${path} responded ${response.status}`);
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+    response = await fetch(url.toString(), {
+      headers: {
+        // Sem o Accept a v2 responde 400 — não é opcional.
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    });
+
+    if (response.ok || !RETRY_STATUSES.has(response.status)) break;
+    if (attempt === RETRY_DELAYS_MS.length) break;
+
+    await sleep(RETRY_DELAYS_MS[attempt]);
+  }
+
+  if (!response || !response.ok) {
+    throw new Error(`Abacate Pay ${path} responded ${response?.status ?? 'no response'}`);
   }
 
   const payload = (await response.json()) as AbacateEnvelope<T>;
@@ -119,12 +137,24 @@ export async function getAbacateCustomers(): Promise<AbacateCustomer[]> {
 export interface AbacateData {
   charges: AbacatePixCharge[];
   customers: AbacateCustomer[];
+  // false quando a busca falhou: o PIX da Abacate está faltando no resultado.
+  // Quem consome precisa avisar, e não somar como se o total estivesse completo.
+  available: boolean;
 }
 
-// Never let an Abacate outage take the whole dashboard down: Stripe data still renders.
+// Cada carregamento do dashboard puxava todo o histórico, e a página chama a
+// rota duas vezes — era pressão suficiente para a própria Abacate throttlar e
+// devolver 400. Um cache curto derruba isso sem deixar o número velho.
+const CACHE_TTL_MS = 60_000;
+let cache: { at: number; data: AbacateData } | null = null;
+
 export async function getAbacateData(startDate?: Date): Promise<AbacateData> {
   if (!isAbacateConfigured()) {
-    return { charges: [], customers: [] };
+    return { charges: [], customers: [], available: true };
+  }
+
+  if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
+    return cache.data;
   }
 
   try {
@@ -133,9 +163,13 @@ export async function getAbacateData(startDate?: Date): Promise<AbacateData> {
       getAbacateCustomers().catch(() => [] as AbacateCustomer[]),
     ]);
 
-    return { charges, customers };
+    const data: AbacateData = { charges, customers, available: true };
+    cache = { at: Date.now(), data };
+    return data;
   } catch (error) {
     console.error('Error fetching Abacate Pay data:', error);
-    return { charges: [], customers: [] };
+    // Um resultado bom recente vale mais que sumir com a receita do PIX.
+    if (cache) return cache.data;
+    return { charges: [], customers: [], available: false };
   }
 }

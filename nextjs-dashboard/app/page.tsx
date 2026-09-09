@@ -48,6 +48,8 @@ interface DashboardData {
   dailyPayouts: DailyPayout[];
   subscriptionRecords: SubscriptionRecord[];
   failedPayments: FailedPayment[];
+  // false quando a busca na Abacate falhou e a receita de PIX está faltando.
+  pixAvailable?: boolean;
 }
 
 export default function Home() {
@@ -228,6 +230,22 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* A receita de PIX pode faltar sem nada quebrar: um total incompleto
+          exibido como completo engana mais que um erro na cara. */}
+      {data.pixAvailable === false && (
+        <div className="container mx-auto px-3 md:px-4 pt-3 md:pt-4">
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 md:px-4 md:py-3 text-amber-900">
+            <p className="text-xs md:text-sm font-medium">
+              Os pagamentos PIX da Abacate Pay não puderam ser carregados agora.
+            </p>
+            <p className="text-xs md:text-sm mt-0.5">
+              Os valores abaixo mostram só o Stripe e os registros manuais — o total está
+              incompleto. Tente atualizar em alguns instantes.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Key Metrics - Always Visible */}
       <div className="container mx-auto px-3 md:px-4 py-4 md:py-8">

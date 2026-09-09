@@ -159,6 +159,9 @@ export async function GET() {
         dailyPayouts,
         subscriptionRecords,
         failedPayments,
+        // Quando false, o PIX da Abacate nao entrou nos totais. A tela precisa
+        // avisar: um total incompleto passando por completo e pior que um erro.
+        pixAvailable: abacate.available,
       },
       {
         headers: {
