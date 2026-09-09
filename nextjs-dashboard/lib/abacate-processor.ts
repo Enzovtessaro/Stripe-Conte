@@ -14,12 +14,26 @@ import type { IdentityIndex } from './conte-identities';
 const MONTH_FORMAT = 'yyyy-MM';
 const DEFAULT_PLAN_LABEL = 'PIX Abacate Pay';
 
+// Cobrança que não casa com nenhuma linha de pix_payments não passou pela
+// create-pix-charge — é avulsa. Hoje são as renovações de certificado da
+// cert-renovacao-reminder, todas de R$ 180, sem exceção nos dados verificados.
+// Pagamento anual e único: entra na receita, mas não cria assinante.
+const ONE_OFF_PLAN_LABEL = 'Certificado Digital (anual)';
+const MONTHS_PER_YEAR = 12;
+
 // A PIX subscriber pays monthly. Anyone whose last payment is older than this
 // window is treated as churned, since Abacate has no subscription object here.
 const ACTIVE_WINDOW_DAYS = 45;
 
 // Valor de clients.status no backoffice do Conte para cliente ativo.
 const ACTIVE_CLIENT_STATUS = 'ativa';
+
+export interface OneOffMonth {
+  month: string;
+  monthDate: Date;
+  revenue: number;
+  count: number;
+}
 
 export interface AbacateMetrics {
   mrrData: MonthlyMRR[];
@@ -33,6 +47,11 @@ export interface AbacateMetrics {
   financialMetrics: FinancialMetrics;
   subscriptionRecords: SubscriptionRecord[];
   firstPaymentDate: Date | null;
+  // Cobranças avulsas (hoje, renovação de certificado): entram na receita mas
+  // não são assinatura de ninguém.
+  oneOffMonthly: OneOffMonth[];
+  oneOffTotal: number;
+  oneOffLast12Months: number;
 }
 
 interface NormalizedPayment {
@@ -192,15 +211,39 @@ export function getAbacateMetrics(
   let grossRevenue = 0;
   let totalFees = 0;
 
+  const oneOffMap = new Map<string, { monthDate: Date; revenue: number; count: number }>();
+  let oneOffTotal = 0;
+  let oneOffLast12Months = 0;
+
   for (const payment of payments) {
+    // Sem identidade = cobrança avulsa. Ela conta como receita em todo lugar,
+    // mas não vira assinante: era isso que multiplicava cada certificado por 12
+    // e inflava o ARR.
+    const isOneOff = !payment.identified;
+
     const installmentNumber = (paymentsPerCustomer.get(payment.customerKey) || 0) + 1;
     paymentsPerCustomer.set(payment.customerKey, installmentNumber);
-    lastPaymentByCustomer.set(payment.customerKey, {
-      paidAt: payment.paidAt,
-      amount: payment.amount,
-      plan: payment.plan,
-      clientStatus: payment.clientStatus,
-    });
+
+    if (isOneOff) {
+      const monthDate = startOfMonth(payment.paidAt);
+      const key = format(monthDate, MONTH_FORMAT);
+      const entry = oneOffMap.get(key) || { monthDate, revenue: 0, count: 0 };
+      entry.revenue += payment.amount;
+      entry.count += 1;
+      oneOffMap.set(key, entry);
+
+      oneOffTotal += payment.amount;
+      if (differenceInDays(referenceDate, payment.paidAt) <= 365) {
+        oneOffLast12Months += payment.amount;
+      }
+    } else {
+      lastPaymentByCustomer.set(payment.customerKey, {
+        paidAt: payment.paidAt,
+        amount: payment.amount,
+        plan: payment.plan,
+        clientStatus: payment.clientStatus,
+      });
+    }
 
     grossRevenue += payment.amount;
     totalFees += payment.fee;
@@ -218,6 +261,7 @@ export function getAbacateMetrics(
 
     if (
       hasIdentity &&
+      !isOneOff &&
       installmentNumber === 1 &&
       !migratedCustomers.has(normalizeCustomerName(payment.customerName))
     ) {
@@ -244,7 +288,7 @@ export function getAbacateMetrics(
     dailyMap.set(dayKey, dailyEntry);
 
     subscriptionRecords.push({
-      customerName: payment.identified ? payment.customerName : 'PIX (Abacate Pay)',
+      customerName: payment.identified ? payment.customerName : ONE_OFF_PLAN_LABEL,
       customerEmail: payment.customerEmail,
       amount: Math.round(payment.amount * 100) / 100,
       date: payment.paidAt,
@@ -303,6 +347,12 @@ export function getAbacateMetrics(
     }
   }
 
+  // Um pagamento anual comparado a planos mensais vale o duodécimo: é assim que
+  // um plano anual entra num mix de MRR sem distorcer as fatias.
+  if (oneOffLast12Months > 0) {
+    planMap.set(ONE_OFF_PLAN_LABEL, oneOffLast12Months / MONTHS_PER_YEAR);
+  }
+
   const planTotal = Array.from(planMap.values()).reduce((sum, value) => sum + value, 0);
   const revenueByPlan: PlanRevenue[] = Array.from(planMap.entries())
     .map(([plan, mrr]) => ({
@@ -351,13 +401,24 @@ export function getAbacateMetrics(
     customerTrends: hasIdentity ? customerTrends : [],
     revenueByPlan: hasIdentity ? revenueByPlan : [],
     churnSnapshot: hasIdentity ? { activeCount, inactiveCount } : { activeCount: 0, inactiveCount: 0 },
-    arr: hasIdentity ? round(activeMRR * 12) : 0,
+    // O avulso ja e anual: entra pelo valor cheio dos ultimos 12 meses, nao x12.
+    arr: hasIdentity ? round(activeMRR * MONTHS_PER_YEAR + oneOffLast12Months) : round(oneOffLast12Months),
     totalSubscriptions: hasIdentity ? lastPaymentByCustomer.size : 0,
     dailyPayouts,
     monthlyFinancials,
     financialMetrics,
     subscriptionRecords: subscriptionRecords.sort((a, b) => b.date.getTime() - a.date.getTime()),
     firstPaymentDate: payments.length > 0 ? payments[0].paidAt : null,
+    oneOffMonthly: Array.from(oneOffMap.values())
+      .map((entry) => ({
+        month: format(entry.monthDate, 'MMM yyyy'),
+        monthDate: entry.monthDate,
+        revenue: round(entry.revenue),
+        count: entry.count,
+      }))
+      .sort((a, b) => a.monthDate.getTime() - b.monthDate.getTime()),
+    oneOffTotal: round(oneOffTotal),
+    oneOffLast12Months: round(oneOffLast12Months),
   };
 }
 

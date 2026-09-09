@@ -128,30 +128,58 @@ export function mergeCustomerTrends(
   return result;
 }
 
+// O Stripe grava "Plano Especialista" e o backoffice grava "especialista" para
+// o mesmo plano. Sem normalizar, o gráfico de pizza mostra a mesma coisa em
+// duas fatias. A chave ignora caixa, acento e o prefixo "Plano".
+function planKey(plan: string): string {
+  return plan
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/^plano\s+/, '')
+    .trim();
+}
+
+// Entre as variantes do mesmo plano, mostra a mais completa ("Plano
+// Especialista" ganha de "especialista"), com desempate por ordem alfabética
+// para o rótulo não trocar a cada carregamento.
+function betterLabel(a: string, b: string): string {
+  if (a.length !== b.length) return a.length > b.length ? a : b;
+  return a < b ? a : b;
+}
+
 // Merge revenue by plan
 export function mergeRevenueByPlan(
   stripeRevenue: PlanRevenue[],
   pixRevenue: Array<{ plan: string; mrr: number; percentage: number }>
 ): PlanRevenue[] {
-  const planMap = new Map<string, number>();
-  
-  // Add Stripe data
+  const planMap = new Map<string, { label: string; mrr: number }>();
+
+  const accumulate = (plan: string, mrr: number) => {
+    const key = planKey(plan);
+    const existing = planMap.get(key);
+
+    if (existing) {
+      existing.mrr += mrr;
+      existing.label = betterLabel(existing.label, plan);
+    } else {
+      planMap.set(key, { label: plan, mrr });
+    }
+  };
+
   for (const item of stripeRevenue) {
-    planMap.set(item.plan, item.mrr);
+    accumulate(item.plan, item.mrr);
   }
-  
-  // Add PIX data
+
   for (const item of pixRevenue) {
-    const existing = planMap.get(item.plan) || 0;
-    planMap.set(item.plan, existing + item.mrr);
+    accumulate(item.plan, item.mrr);
   }
-  
-  // Calculate total and percentages
-  const totalMRR = Array.from(planMap.values()).reduce((sum, mrr) => sum + mrr, 0);
-  
-  return Array.from(planMap.entries())
-    .map(([plan, mrr]) => ({
-      plan,
+
+  const totalMRR = Array.from(planMap.values()).reduce((sum, item) => sum + item.mrr, 0);
+
+  return Array.from(planMap.values())
+    .map(({ label, mrr }) => ({
+      plan: label,
       mrr: Math.round(mrr * 100) / 100,
       percentage: totalMRR > 0 ? Math.round((mrr / totalMRR) * 100 * 100) / 100 : 0,
     }))

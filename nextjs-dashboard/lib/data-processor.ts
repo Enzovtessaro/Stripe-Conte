@@ -7,6 +7,9 @@ export interface MonthlyMRR {
   newMRR: number;
   existingMRR: number;
   totalMRR: number;
+  // O mes corrente ainda esta sendo faturado: a parte de PIX conta o que ja
+  // entrou em caixa, entao o total so fecha quando o mes acaba.
+  isPartial?: boolean;
 }
 
 export interface CustomerTrend {

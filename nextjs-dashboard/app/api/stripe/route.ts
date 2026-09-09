@@ -8,7 +8,7 @@ import {
   getInvoices 
 } from '@/lib/stripe';
 import { DataProcessor } from '@/lib/data-processor';
-import { subMonths } from 'date-fns';
+import { format, startOfMonth, subMonths } from 'date-fns';
 import { getPixMetrics } from '@/lib/pix-processor';
 import { getAbacateData } from '@/lib/abacate';
 import { getAbacateMetrics, getFirstPaidDate } from '@/lib/abacate-processor';
@@ -102,7 +102,14 @@ export async function GET() {
       abacateMetrics.revenueByPlan
     );
 
-    const mrrData = mergeMRRData(stripeMRR, pixMRR);
+    const mergedMRR = mergeMRRData(stripeMRR, pixMRR);
+    // O Stripe e run-rate e fecha em qualquer mes; o PIX e caixa e so fecha no
+    // fim do mes. Somados, o mes corrente sempre aparece menor e parece churn.
+    const currentMonthKey = format(startOfMonth(new Date()), 'yyyy-MM');
+    const mrrData = mergedMRR.map((item) => ({
+      ...item,
+      isPartial: format(startOfMonth(item.monthDate), 'yyyy-MM') === currentMonthKey,
+    }));
     const customerTrends = mergeCustomerTrends(stripeCustomerTrends, pixCustomerTrends);
     const revenueByPlan = mergeRevenueByPlan(stripeRevenueByPlan, pixRevenueByPlan);
     const churnMetrics = mergeChurnMetrics(stripeChurn, {
@@ -162,6 +169,13 @@ export async function GET() {
         // Quando false, o PIX da Abacate nao entrou nos totais. A tela precisa
         // avisar: um total incompleto passando por completo e pior que um erro.
         pixAvailable: abacate.available,
+        // Cobrancas avulsas (renovacao de certificado): receita real, mas nao
+        // assinatura — por isso vao separadas do MRR recorrente.
+        oneOffRevenue: {
+          monthly: abacateMetrics.oneOffMonthly,
+          total: abacateMetrics.oneOffTotal,
+          last12Months: abacateMetrics.oneOffLast12Months,
+        },
       },
       {
         headers: {
