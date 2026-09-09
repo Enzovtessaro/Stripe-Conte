@@ -131,21 +131,19 @@ export function mergeCustomerTrends(
 // O Stripe grava "Plano Especialista" e o backoffice grava "especialista" para
 // o mesmo plano. Sem normalizar, o gráfico de pizza mostra a mesma coisa em
 // duas fatias. A chave ignora caixa, acento e o prefixo "Plano".
+// Além de caixa e acento, ignora o prefixo "Plano" e as conectivas — é o que
+// separa "Manutenção de empresa" de "Manutenção da empresa", que são o mesmo
+// produto cadastrado com escrita diferente em cada fonte.
+const CONNECTIVES = /\b(de|da|do|das|dos|em|na|no|nas|nos|e)\b/g;
+
 function planKey(plan: string): string {
   return plan
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/^plano\s+/, '')
-    .trim();
-}
-
-// Entre as variantes do mesmo plano, mostra a mais completa ("Plano
-// Especialista" ganha de "especialista"), com desempate por ordem alfabética
-// para o rótulo não trocar a cada carregamento.
-function betterLabel(a: string, b: string): string {
-  if (a.length !== b.length) return a.length > b.length ? a : b;
-  return a < b ? a : b;
+    .replace(CONNECTIVES, ' ')
+    .replace(/[^a-z0-9]/g, '');
 }
 
 // Merge revenue by plan
@@ -153,7 +151,9 @@ export function mergeRevenueByPlan(
   stripeRevenue: PlanRevenue[],
   pixRevenue: Array<{ plan: string; mrr: number; percentage: number }>
 ): PlanRevenue[] {
-  const planMap = new Map<string, { label: string; mrr: number }>();
+  // Entre variantes do mesmo plano, exibe a escrita da que traz mais receita —
+  // é a grafia predominante, não a mais longa por acaso.
+  const planMap = new Map<string, { label: string; labelMrr: number; mrr: number }>();
 
   const accumulate = (plan: string, mrr: number) => {
     const key = planKey(plan);
@@ -161,9 +161,12 @@ export function mergeRevenueByPlan(
 
     if (existing) {
       existing.mrr += mrr;
-      existing.label = betterLabel(existing.label, plan);
+      if (mrr > existing.labelMrr) {
+        existing.label = plan;
+        existing.labelMrr = mrr;
+      }
     } else {
-      planMap.set(key, { label: plan, mrr });
+      planMap.set(key, { label: plan, labelMrr: mrr, mrr });
     }
   };
 

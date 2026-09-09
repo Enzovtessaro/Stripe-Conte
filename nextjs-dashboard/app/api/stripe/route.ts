@@ -8,7 +8,7 @@ import {
   getInvoices 
 } from '@/lib/stripe';
 import { DataProcessor } from '@/lib/data-processor';
-import { format, startOfMonth, subMonths } from 'date-fns';
+import { subMonths } from 'date-fns';
 import { getPixMetrics } from '@/lib/pix-processor';
 import { getAbacateData } from '@/lib/abacate';
 import { getAbacateMetrics, getFirstPaidDate } from '@/lib/abacate-processor';
@@ -119,14 +119,9 @@ export async function GET() {
       abacateMetrics.revenueByPlan
     );
 
-    const mergedMRR = mergeMRRData(stripeMRR, pixMRR);
-    // O Stripe e run-rate e fecha em qualquer mes; o PIX e caixa e so fecha no
-    // fim do mes. Somados, o mes corrente sempre aparece menor e parece churn.
-    const currentMonthKey = format(startOfMonth(new Date()), 'yyyy-MM');
-    const mrrData = mergedMRR.map((item) => ({
-      ...item,
-      isPartial: format(startOfMonth(item.monthDate), 'yyyy-MM') === currentMonthKey,
-    }));
+    // Stripe e PIX agora sao os dois run-rate, entao o mes corrente ja vem
+    // completo e nao precisa de marca de parcial.
+    const mrrData = mergeMRRData(stripeMRR, pixMRR);
     const customerTrends = mergeCustomerTrends(stripeCustomerTrends, pixCustomerTrends);
     const revenueByPlan = mergeRevenueByPlan(stripeRevenueByPlan, pixRevenueByPlan);
     const churnMetrics = mergeChurnMetrics(stripeChurn, {

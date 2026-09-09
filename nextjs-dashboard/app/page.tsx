@@ -181,24 +181,13 @@ export default function Home() {
   );
 
   // Calculate metrics from filtered data
-  // O mes corrente ainda esta sendo faturado (a parte de PIX so fecha no fim do
-  // mes), entao os cartoes leem o ultimo mes COMPLETO. Usar o parcial fazia o
-  // MRR aparecer caindo todo mes, como se fosse churn.
-  const partialMonth = filteredMRR[filteredMRR.length - 1]?.isPartial
-    ? filteredMRR[filteredMRR.length - 1]
-    : null;
-  const closedMRR = partialMonth ? filteredMRR.slice(0, -1) : filteredMRR;
-
-  // O mes parcial continua no grafico — some com ele esconderia receita real —
-  // mas rotulado, para a queda nao ser lida como perda de cliente.
-  const chartMRR = filteredMRR.map((item) =>
-    item.isPartial ? { ...item, month: `${item.month} (parcial)` } : item
-  );
-
-  const latestMRR = closedMRR[closedMRR.length - 1]?.totalMRR || 0;
-  const previousMRR = closedMRR[closedMRR.length - 2]?.totalMRR || 0;
-  const latestNewMRR = closedMRR[closedMRR.length - 1]?.newMRR || 0;
-  const previousNewMRR = closedMRR[closedMRR.length - 2]?.newMRR || 0;
+  // As duas fontes viraram run-rate: o Stripe soma o valor recorrente das
+  // assinaturas ativas e o PIX soma o dos clientes ativos. O mes corrente fecha
+  // sozinho, sem depender de quem ja pagou, entao os cartoes leem o mes atual.
+  const latestMRR = filteredMRR[filteredMRR.length - 1]?.totalMRR || 0;
+  const previousMRR = filteredMRR[filteredMRR.length - 2]?.totalMRR || 0;
+  const latestNewMRR = filteredMRR[filteredMRR.length - 1]?.newMRR || 0;
+  const previousNewMRR = filteredMRR[filteredMRR.length - 2]?.newMRR || 0;
   const growthRate =
     previousMRR > 0 ? ((latestMRR - previousMRR) / previousMRR) * 100 : 0;
   
@@ -227,9 +216,6 @@ export default function Home() {
               <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold">Dashboard de Receitas</h1>
               <p className="text-xs md:text-sm text-muted-foreground mt-1">
                 Análise em tempo real • {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                {partialMonth && (
-                  <> • indicadores referentes a {closedMRR[closedMRR.length - 1]?.month}, último mês fechado</>
-                )}
               </p>
             </div>
             <div className="flex items-center gap-2 justify-center md:justify-end">
@@ -333,8 +319,8 @@ export default function Home() {
           {/* Aba 1: Visão Geral de Receitas */}
           <TabsContent value="revenue" className="space-y-4 md:space-y-8">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-6">
-              <MRRChart data={chartMRR} />
-              <GrowthChart data={chartMRR} />
+              <MRRChart data={filteredMRR} />
+              <GrowthChart data={filteredMRR} />
             </div>
             
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-6">

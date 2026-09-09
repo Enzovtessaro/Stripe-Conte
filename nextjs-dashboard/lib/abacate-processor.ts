@@ -1,4 +1,4 @@
-import { differenceInDays, format, parseISO, startOfMonth } from 'date-fns';
+import { addMonths, differenceInDays, format, parseISO, startOfMonth } from 'date-fns';
 import type {
   CustomerTrend,
   DailyPayout,
@@ -12,7 +12,9 @@ import type { AbacateCustomer, AbacatePixCharge } from './abacate';
 import type { IdentityIndex } from './conte-identities';
 
 const MONTH_FORMAT = 'yyyy-MM';
-const DEFAULT_PLAN_LABEL = 'PIX Abacate Pay';
+// Cliente identificado cujo plano esta vazio no backoffice. Nomear isso e
+// melhor que exibir um rotulo interno como se fosse um produto.
+const DEFAULT_PLAN_LABEL = 'Sem plano cadastrado';
 
 // Cobrança que não casa com nenhuma linha de pix_payments não passou pela
 // create-pix-charge — é avulsa. Hoje são as renovações de certificado da
@@ -206,6 +208,10 @@ export function getAbacateMetrics(
     string,
     { paidAt: Date; amount: number; plan: string; clientStatus: string | null }
   >();
+  // Primeiro pagamento de cada cliente: e o inicio do intervalo em que ele
+  // conta como receita recorrente, do mesmo jeito que o Stripe usa a data de
+  // criacao da assinatura.
+  const firstPaidByCustomer = new Map<string, Date>();
   const subscriptionRecords: SubscriptionRecord[] = [];
 
   let grossRevenue = 0;
@@ -237,6 +243,9 @@ export function getAbacateMetrics(
         oneOffLast12Months += payment.amount;
       }
     } else {
+      if (!firstPaidByCustomer.has(payment.customerKey)) {
+        firstPaidByCustomer.set(payment.customerKey, payment.paidAt);
+      }
       lastPaymentByCustomer.set(payment.customerKey, {
         paidAt: payment.paidAt,
         amount: payment.amount,
@@ -251,13 +260,6 @@ export function getAbacateMetrics(
     const monthDate = startOfMonth(payment.paidAt);
     const monthKey = format(monthDate, MONTH_FORMAT);
 
-    const monthEntry = monthMap.get(monthKey) || { monthDate, newMRR: 0, existingMRR: 0 };
-    if (installmentNumber === 1) {
-      monthEntry.newMRR += payment.amount;
-    } else {
-      monthEntry.existingMRR += payment.amount;
-    }
-    monthMap.set(monthKey, monthEntry);
 
     if (
       hasIdentity &&
@@ -297,6 +299,55 @@ export function getAbacateMetrics(
     });
   }
 
+  // MRR como run-rate, e nao como caixa. O Stripe soma o valor recorrente das
+  // assinaturas ativas no mes; se o PIX somasse so o que entrou em caixa, o mes
+  // corrente apareceria menor todo mes ate fechar — parecendo churn. Cada
+  // cliente conta do primeiro pagamento ate hoje, ou ate o ultimo pagamento se
+  // ja saiu, pelo valor que paga hoje.
+  for (const [customerKey, last] of Array.from(lastPaymentByCustomer.entries())) {
+    const firstPaidAt = firstPaidByCustomer.get(customerKey) ?? last.paidAt;
+    const isActive = last.clientStatus !== null
+      ? last.clientStatus === ACTIVE_CLIENT_STATUS
+      : differenceInDays(referenceDate, last.paidAt) <= ACTIVE_WINDOW_DAYS;
+
+    const firstMonth = startOfMonth(firstPaidAt);
+    const lastMonth = startOfMonth(isActive ? referenceDate : last.paidAt);
+
+    let cursor = firstMonth;
+    while (cursor <= lastMonth) {
+      const key = format(cursor, MONTH_FORMAT);
+      const entry = monthMap.get(key) || { monthDate: cursor, newMRR: 0, existingMRR: 0 };
+
+      if (cursor.getTime() === firstMonth.getTime()) {
+        entry.newMRR += last.amount;
+      } else {
+        entry.existingMRR += last.amount;
+      }
+
+      monthMap.set(key, entry);
+      cursor = addMonths(cursor, 1);
+    }
+  }
+
+  // Certificado e pagamento anual: dilui em 12 meses a partir da compra, que e
+  // como um plano anual entra num MRR mensal sem virar um pico de um mes so.
+  for (const payment of payments) {
+    if (payment.identified) continue;
+
+    const monthly = payment.amount / MONTHS_PER_YEAR;
+    let cursor = startOfMonth(payment.paidAt);
+    const limit = startOfMonth(referenceDate);
+
+    for (let i = 0; i < MONTHS_PER_YEAR && cursor <= limit; i += 1) {
+      const key = format(cursor, MONTH_FORMAT);
+      const entry = monthMap.get(key) || { monthDate: cursor, newMRR: 0, existingMRR: 0 };
+      if (i === 0) entry.newMRR += monthly;
+      else entry.existingMRR += monthly;
+      monthMap.set(key, entry);
+      cursor = addMonths(cursor, 1);
+    }
+  }
+
   const mrrData: MonthlyMRR[] = Array.from(monthMap.values())
     .map((entry) => {
       const total = entry.newMRR + entry.existingMRR;
@@ -305,8 +356,8 @@ export function getAbacateMetrics(
         monthDate: entry.monthDate,
         // Splitting new from existing needs to know who paid, so unattributed
         // revenue is reported whole as existing rather than guessed.
-        newMRR: hasIdentity ? round(entry.newMRR) : 0,
-        existingMRR: hasIdentity ? round(entry.existingMRR) : round(total),
+        newMRR: round(entry.newMRR),
+        existingMRR: round(entry.existingMRR),
         totalMRR: round(total),
       };
     })
