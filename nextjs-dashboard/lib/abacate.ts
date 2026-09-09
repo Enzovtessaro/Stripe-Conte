@@ -119,7 +119,9 @@ async function paginate<T extends { id: string }>(
 }
 
 export async function getAbacatePixCharges(startDate?: Date): Promise<AbacatePixCharge[]> {
-  const params: Record<string, string | undefined> = {};
+  // Filtrar no servidor corta 205 cobrancas (3 paginas) para 66 (1 pagina). A
+  // v2 throttla com facilidade, entao cada requisicao a menos conta.
+  const params: Record<string, string | undefined> = { status: 'PAID' };
 
   if (startDate) {
     params.startDate = startDate.toISOString().slice(0, 10);
@@ -158,12 +160,11 @@ export async function getAbacateData(startDate?: Date): Promise<AbacateData> {
   }
 
   try {
-    const [charges, customers] = await Promise.all([
-      getAbacatePixCharges(startDate),
-      getAbacateCustomers().catch(() => [] as AbacateCustomer[]),
-    ]);
+    // Sem getAbacateCustomers: nenhuma cobranca referencia cliente, entao a
+    // lista nao resolvia nada e so gastava requisicao contra o throttle.
+    const charges = await getAbacatePixCharges(startDate);
 
-    const data: AbacateData = { charges, customers, available: true };
+    const data: AbacateData = { charges, customers: [], available: true };
     cache = { at: Date.now(), data };
     return data;
   } catch (error) {

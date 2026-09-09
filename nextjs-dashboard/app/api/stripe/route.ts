@@ -28,8 +28,25 @@ import {
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+// Montar a resposta custa 35-55s: 12 meses de balance transactions e invoices
+// do Stripe, mais o historico do Abacate. A pagina ainda chama a rota duas
+// vezes, entao sem cache um carregamento levava ~90s e parecia travado.
+// 60s mantem o numero fresco e faz o segundo acesso ser instantaneo.
+const NO_STORE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+};
+
+const RESPONSE_TTL_MS = 60_000;
+let responseCache: { at: number; body: unknown } | null = null;
+
 export async function GET() {
   try {
+    if (responseCache && Date.now() - responseCache.at < RESPONSE_TTL_MS) {
+      return NextResponse.json(responseCache.body, { headers: NO_STORE_HEADERS });
+    }
+
     // Fetch subscriptions from Stripe
     const subscriptions = await getSubscriptions();
 
@@ -153,8 +170,7 @@ export async function GET() {
       mergeSubscriptionRecords(pixMetrics.subscriptionRecords, abacateMetrics.subscriptionRecords)
     );
 
-    return NextResponse.json(
-      {
+    const body = {
         mrrData,
         arr,
         churnMetrics,
@@ -176,15 +192,15 @@ export async function GET() {
           total: abacateMetrics.oneOffTotal,
           last12Months: abacateMetrics.oneOffLast12Months,
         },
-      },
-      {
-        headers: {
-          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0',
-        },
-      }
-    );
+    };
+
+    // Resposta sem o PIX nao vira cache: a proxima visita tenta de novo em vez
+    // de repetir por um minuto um total que esta incompleto.
+    if (abacate.available) {
+      responseCache = { at: Date.now(), body };
+    }
+
+    return NextResponse.json(body, { headers: NO_STORE_HEADERS });
   } catch (error) {
     console.error('Error fetching Stripe data:', error);
     return NextResponse.json(
