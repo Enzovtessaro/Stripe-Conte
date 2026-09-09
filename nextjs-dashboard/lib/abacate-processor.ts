@@ -9,6 +9,7 @@ import type {
   SubscriptionRecord,
 } from './data-processor';
 import type { AbacateCustomer, AbacatePixCharge } from './abacate';
+import type { IdentityIndex } from './conte-identities';
 
 const MONTH_FORMAT = 'yyyy-MM';
 const DEFAULT_PLAN_LABEL = 'PIX Abacate Pay';
@@ -16,6 +17,9 @@ const DEFAULT_PLAN_LABEL = 'PIX Abacate Pay';
 // A PIX subscriber pays monthly. Anyone whose last payment is older than this
 // window is treated as churned, since Abacate has no subscription object here.
 const ACTIVE_WINDOW_DAYS = 45;
+
+// Valor de clients.status no backoffice do Conte para cliente ativo.
+const ACTIVE_CLIENT_STATUS = 'ativa';
 
 export interface AbacateMetrics {
   mrrData: MonthlyMRR[];
@@ -41,6 +45,9 @@ interface NormalizedPayment {
   amount: number;
   fee: number;
   paidAt: Date;
+  // Status do cliente no backoffice, quando conhecido. Vale mais que inferir
+  // atividade por tempo desde o último pagamento.
+  clientStatus: string | null;
 }
 
 function readMetadataString(
@@ -63,7 +70,8 @@ function readMetadataString(
 
 function normalizePayments(
   charges: AbacatePixCharge[],
-  customers: AbacateCustomer[]
+  customers: AbacateCustomer[],
+  identities: IdentityIndex
 ): NormalizedPayment[] {
   const customerById = new Map(customers.map((customer) => [customer.id, customer]));
 
@@ -71,17 +79,30 @@ function normalizePayments(
     .filter((charge) => charge.status === 'PAID' && !charge.devMode)
     .map((charge) => {
       const linkedCustomer = charge.customer ?? (charge.customerId ? customerById.get(charge.customerId) : undefined);
-      const identified = Boolean(linkedCustomer?.name || readMetadataString(charge.metadata, ['customerName', 'name']));
+      // Identidade vinda do backoffice do Conte, casada pelo id da cobrança ou
+      // pelo externalId do metadata.
+      const externalId = readMetadataString(charge.metadata, ['externalId']);
+      const identity =
+        identities.get(charge.id) || (externalId ? identities.get(externalId) : undefined);
+
+      const identified = Boolean(
+        identity?.companyName ||
+          linkedCustomer?.name ||
+          readMetadataString(charge.metadata, ['customerName', 'name'])
+      );
 
       const customerName =
+        identity?.companyName?.trim() ||
         linkedCustomer?.name?.trim() ||
         readMetadataString(charge.metadata, ['customerName', 'name']) ||
         charge.description?.trim() ||
         'Cliente PIX';
 
-      const customerEmail = linkedCustomer?.email?.trim() || 'N/A';
+      const customerEmail =
+        identity?.email?.trim() || linkedCustomer?.email?.trim() || 'N/A';
 
       const plan =
+        identity?.plano?.trim() ||
         readMetadataString(charge.metadata, ['plan', 'planType', 'plano']) ||
         charge.description?.trim() ||
         DEFAULT_PLAN_LABEL;
@@ -98,7 +119,9 @@ function normalizePayments(
         // Without identity every charge is its own bucket, so unrelated payments
         // are never collapsed into one fictitious customer.
         customerKey: identified
-          ? linkedCustomer?.id || (customerEmail !== 'N/A' ? customerEmail : customerName)
+          ? identity?.clientId ||
+            linkedCustomer?.id ||
+            (customerEmail !== 'N/A' ? customerEmail : customerName)
           : charge.id,
         customerName,
         customerEmail,
@@ -106,6 +129,7 @@ function normalizePayments(
         amount: charge.amount / 100,
         fee: (charge.platformFee ?? 0) / 100,
         paidAt,
+        clientStatus: identity?.clientStatus ?? null,
       };
     })
     .filter((payment) => !Number.isNaN(payment.paidAt.getTime()))
@@ -140,13 +164,14 @@ export function getAbacateMetrics(
   charges: AbacatePixCharge[],
   customers: AbacateCustomer[],
   referenceDate: Date = new Date(),
-  alreadyCountedCustomerNames: string[] = []
+  alreadyCountedCustomerNames: string[] = [],
+  identities: IdentityIndex = new Map()
 ): AbacateMetrics {
   const migratedCustomers = new Set(alreadyCountedCustomerNames.map(normalizeCustomerName));
-  const payments = normalizePayments(charges, customers);
+  const payments = normalizePayments(charges, customers, identities);
 
-  // /transparents/list returns no customer on a charge unless one was attached at
-  // creation time. With no identity we can still report every cruzeiro, but any
+  // /transparents/list returns no customer on a charge, so identity comes from the
+  // Conte backoffice. Without it we can still report every cruzeiro, but any
   // per-customer metric would be invented, so those are left to the other sources.
   const hasIdentity = payments.some((payment) => payment.identified);
 
@@ -160,7 +185,7 @@ export function getAbacateMetrics(
   const paymentsPerCustomer = new Map<string, number>();
   const lastPaymentByCustomer = new Map<
     string,
-    { paidAt: Date; amount: number; plan: string }
+    { paidAt: Date; amount: number; plan: string; clientStatus: string | null }
   >();
   const subscriptionRecords: SubscriptionRecord[] = [];
 
@@ -174,6 +199,7 @@ export function getAbacateMetrics(
       paidAt: payment.paidAt,
       amount: payment.amount,
       plan: payment.plan,
+      clientStatus: payment.clientStatus,
     });
 
     grossRevenue += payment.amount;
@@ -262,7 +288,11 @@ export function getAbacateMetrics(
   let activeMRR = 0;
 
   for (const last of Array.from(lastPaymentByCustomer.values())) {
-    const isActive = differenceInDays(referenceDate, last.paidAt) <= ACTIVE_WINDOW_DAYS;
+    // O status do backoffice é a verdade sobre quem é cliente. A janela de dias
+    // só entra quando ele não veio, e é palpite: PIX não tem objeto de assinatura.
+    const isActive = last.clientStatus !== null
+      ? last.clientStatus === ACTIVE_CLIENT_STATUS
+      : differenceInDays(referenceDate, last.paidAt) <= ACTIVE_WINDOW_DAYS;
 
     if (isActive) {
       activeCount += 1;

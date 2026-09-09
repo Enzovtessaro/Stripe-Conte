@@ -12,6 +12,7 @@ import { subMonths } from 'date-fns';
 import { getPixMetrics } from '@/lib/pix-processor';
 import { getAbacateData } from '@/lib/abacate';
 import { getAbacateMetrics, getFirstPaidDate } from '@/lib/abacate-processor';
+import { getChargeIdentities } from '@/lib/conte-identities';
 import {
   mergeChurnMetrics,
   mergeCustomerTrends,
@@ -73,7 +74,13 @@ export async function GET() {
     // Abacate Pay is the live source for PIX. The manual records in
     // data/pix-subscriptions.json only cover the period before Abacate had data,
     // so the same customer is never counted on both sides.
-    const abacate = await getAbacateData();
+    // As identidades vêm do backoffice do Conte: o Abacate não devolve cliente
+    // nem plano ao listar as cobranças. Sem elas as métricas por cliente ficam
+    // de fora em vez de saírem erradas.
+    const [abacate, identities] = await Promise.all([
+      getAbacateData(),
+      getChargeIdentities(),
+    ]);
     const abacateCutoff = getFirstPaidDate(abacate.charges);
 
     const pixMetrics = getPixMetrics(new Date(), abacateCutoff);
@@ -81,7 +88,8 @@ export async function GET() {
       abacate.charges,
       abacate.customers,
       new Date(),
-      pixMetrics.customerNames
+      pixMetrics.customerNames,
+      identities
     );
 
     const pixMRR = mergeMRRData(pixMetrics.mrrData, abacateMetrics.mrrData);
