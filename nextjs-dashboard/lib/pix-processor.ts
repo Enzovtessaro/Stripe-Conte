@@ -44,10 +44,11 @@ const pixSubscriptions = pixSubscriptionsData as PixSubscription[];
 const MONTH_FORMAT = 'yyyy-MM';
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-// `cutoffDate` is the first day Abacate Pay has real data for. Manual records
-// only synthesise payments up to the day before it, and stop contributing the
-// "current state" metrics (active subscriptions, ARR, plan mix) entirely —
-// from the cutoff on, Abacate Pay is the source of truth for the same customers.
+// `cutoffDate` is the first day Abacate Pay has real data for. Manual records only
+// synthesise payments up to the day before it, so the same money is never counted
+// twice. Current-state metrics (active subscriptions, ARR, churn, plan mix) stay
+// with this file: Abacate's charges carry no customer or plan, so it cannot
+// report them and there is nothing to double count.
 export function getPixMetrics(
   referenceDate: Date = new Date(),
   cutoffDate: Date | null = null
@@ -215,8 +216,6 @@ export function getPixMetrics(
     }))
     .sort((a, b) => a.monthDate.getTime() - b.monthDate.getTime());
 
-  const supersededByAbacate = cutoffDate !== null;
-
   const financialMetrics: FinancialMetrics = {
     grossRevenue: Math.round(grossRevenue * 100) / 100,
     stripeFees: 0,
@@ -237,12 +236,13 @@ export function getPixMetrics(
   return {
     mrrData,
     customerTrends,
-    revenueByPlan: supersededByAbacate ? [] : normalizedRevenueByPlan,
-    churnSnapshot: supersededByAbacate
-      ? { activeCount: 0, inactiveCount: 0 }
-      : { activeCount, inactiveCount },
-    arr: supersededByAbacate ? 0 : Math.round(arr * 100) / 100,
-    totalSubscriptions: supersededByAbacate ? 0 : pixSubscriptions.length,
+    revenueByPlan: normalizedRevenueByPlan,
+    churnSnapshot: {
+      activeCount,
+      inactiveCount,
+    },
+    arr: Math.round(arr * 100) / 100,
+    totalSubscriptions: pixSubscriptions.length,
     dailyPayouts,
     monthlyFinancials,
     financialMetrics,

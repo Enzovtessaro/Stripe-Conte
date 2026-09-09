@@ -33,6 +33,7 @@ export interface AbacateMetrics {
 
 interface NormalizedPayment {
   chargeId: string;
+  identified: boolean;
   customerKey: string;
   customerName: string;
   customerEmail: string;
@@ -70,6 +71,7 @@ function normalizePayments(
     .filter((charge) => charge.status === 'PAID' && !charge.devMode)
     .map((charge) => {
       const linkedCustomer = charge.customer ?? (charge.customerId ? customerById.get(charge.customerId) : undefined);
+      const identified = Boolean(linkedCustomer?.name || readMetadataString(charge.metadata, ['customerName', 'name']));
 
       const customerName =
         linkedCustomer?.name?.trim() ||
@@ -84,14 +86,20 @@ function normalizePayments(
         charge.description?.trim() ||
         DEFAULT_PLAN_LABEL;
 
-      // `updatedAt` is when the charge flipped to PAID; `createdAt` is when the QR was issued.
-      const paidAt = parseISO(charge.updatedAt || charge.createdAt);
+      // `createdAt` is the payment date: a PIX QR is paid within its expiry window,
+      // and these dates match the /trustMRR revenue endpoint day for day.
+      // `updatedAt` is NOT usable — every charge in this account carries a recent
+      // bulk-touched timestamp that would pile all revenue into the current month.
+      const paidAt = parseISO(charge.createdAt);
 
       return {
         chargeId: charge.id,
-        customerKey:
-          linkedCustomer?.id ||
-          (customerEmail !== 'N/A' ? customerEmail : customerName),
+        identified,
+        // Without identity every charge is its own bucket, so unrelated payments
+        // are never collapsed into one fictitious customer.
+        customerKey: identified
+          ? linkedCustomer?.id || (customerEmail !== 'N/A' ? customerEmail : customerName)
+          : charge.id,
         customerName,
         customerEmail,
         plan,
@@ -121,7 +129,7 @@ export function normalizeCustomerName(name: string): string {
 export function getFirstPaidDate(charges: AbacatePixCharge[]): Date | null {
   const paidDates = charges
     .filter((charge) => charge.status === 'PAID' && !charge.devMode)
-    .map((charge) => parseISO(charge.updatedAt || charge.createdAt))
+    .map((charge) => parseISO(charge.createdAt))
     .filter((date) => !Number.isNaN(date.getTime()))
     .sort((a, b) => a.getTime() - b.getTime());
 
@@ -136,6 +144,11 @@ export function getAbacateMetrics(
 ): AbacateMetrics {
   const migratedCustomers = new Set(alreadyCountedCustomerNames.map(normalizeCustomerName));
   const payments = normalizePayments(charges, customers);
+
+  // /transparents/list returns no customer on a charge unless one was attached at
+  // creation time. With no identity we can still report every cruzeiro, but any
+  // per-customer metric would be invented, so those are left to the other sources.
+  const hasIdentity = payments.some((payment) => payment.identified);
 
   const monthMap = new Map<string, { monthDate: Date; newMRR: number; existingMRR: number }>();
   const customerMonthMap = new Map<string, { monthDate: Date; count: number }>();
@@ -177,7 +190,11 @@ export function getAbacateMetrics(
     }
     monthMap.set(monthKey, monthEntry);
 
-    if (installmentNumber === 1 && !migratedCustomers.has(normalizeCustomerName(payment.customerName))) {
+    if (
+      hasIdentity &&
+      installmentNumber === 1 &&
+      !migratedCustomers.has(normalizeCustomerName(payment.customerName))
+    ) {
       const trendEntry = customerMonthMap.get(monthKey) || { monthDate, count: 0 };
       trendEntry.count += 1;
       customerMonthMap.set(monthKey, trendEntry);
@@ -201,23 +218,28 @@ export function getAbacateMetrics(
     dailyMap.set(dayKey, dailyEntry);
 
     subscriptionRecords.push({
-      customerName: payment.customerName,
+      customerName: payment.identified ? payment.customerName : 'PIX (Abacate Pay)',
       customerEmail: payment.customerEmail,
       amount: Math.round(payment.amount * 100) / 100,
       date: payment.paidAt,
-      installmentNumber,
+      installmentNumber: payment.identified ? installmentNumber : 1,
       invoiceId: payment.chargeId,
     });
   }
 
   const mrrData: MonthlyMRR[] = Array.from(monthMap.values())
-    .map((entry) => ({
-      month: format(entry.monthDate, 'MMM yyyy'),
-      monthDate: entry.monthDate,
-      newMRR: round(entry.newMRR),
-      existingMRR: round(entry.existingMRR),
-      totalMRR: round(entry.newMRR + entry.existingMRR),
-    }))
+    .map((entry) => {
+      const total = entry.newMRR + entry.existingMRR;
+      return {
+        month: format(entry.monthDate, 'MMM yyyy'),
+        monthDate: entry.monthDate,
+        // Splitting new from existing needs to know who paid, so unattributed
+        // revenue is reported whole as existing rather than guessed.
+        newMRR: hasIdentity ? round(entry.newMRR) : 0,
+        existingMRR: hasIdentity ? round(entry.existingMRR) : round(total),
+        totalMRR: round(total),
+      };
+    })
     .sort((a, b) => a.monthDate.getTime() - b.monthDate.getTime());
 
   let cumulative = 0;
@@ -296,11 +318,11 @@ export function getAbacateMetrics(
 
   return {
     mrrData,
-    customerTrends,
-    revenueByPlan,
-    churnSnapshot: { activeCount, inactiveCount },
-    arr: round(activeMRR * 12),
-    totalSubscriptions: lastPaymentByCustomer.size,
+    customerTrends: hasIdentity ? customerTrends : [],
+    revenueByPlan: hasIdentity ? revenueByPlan : [],
+    churnSnapshot: hasIdentity ? { activeCount, inactiveCount } : { activeCount: 0, inactiveCount: 0 },
+    arr: hasIdentity ? round(activeMRR * 12) : 0,
+    totalSubscriptions: hasIdentity ? lastPaymentByCustomer.size : 0,
     dailyPayouts,
     monthlyFinancials,
     financialMetrics,

@@ -29,9 +29,31 @@ node scripts/check-abacate.mjs
 | `GET /v2/transparents/list` | Cobranças PIX (`pix_char_*`); só as `PAID` e fora de dev mode entram nas métricas |
 | `GET /v2/customers/list` | Resolve o nome e e-mail do cliente de cada cobrança |
 
-Valores da API vêm em centavos e são convertidos para reais. A data considerada é
-`updatedAt` — o momento em que a cobrança virou `PAID`, não quando o QR Code foi gerado.
-A `platformFee` de cada cobrança entra como taxa, do mesmo jeito que as taxas do Stripe.
+Valores vêm em centavos e são convertidos para reais. A `platformFee` de cada cobrança
+entra como taxa, do mesmo jeito que as taxas do Stripe.
+
+**A data usada é `createdAt`, não `updatedAt`.** Nesta conta os 65 pagamentos têm
+`updatedAt` todos em setembro/2026 (algum toque em massa no registro), enquanto o
+`createdAt` vai de 25/05 a 08/09 e bate dia a dia com o endpoint de receita da Abacate.
+Usar `updatedAt` jogaria a receita inteira no mês corrente.
+
+## Limitação: a cobrança não identifica o cliente
+
+`GET /v2/transparents/list` devolve só `id`, `amount`, `status`, `devMode`, `platformFee`,
+`receiptUrl`, `createdAt`, `updatedAt`, `expiresAt` e `metadata`. Nas cobranças desta conta
+o `metadata` traz apenas um `externalId` UUID, e nenhuma tem cliente vinculado — os 75
+clientes cadastrados na Abacate existem, mas não estão ligados a essas cobranças.
+
+Por isso a Abacate contribui **só com dinheiro**: receita bruta, taxas, receita líquida,
+payouts diários, financeiro mensal e o registro de cada pagamento. Métricas que dependem
+de saber quem pagou — clientes novos, ARR, churn, assinantes ativos e mix de planos —
+ficam zeradas do lado da Abacate, porque qualquer número ali seria inventado. Elas
+continuam vindo do arquivo manual. No gráfico de MRR, a receita da Abacate entra inteira
+como "existente", já que separar novo de recorrente exigiria saber quem pagou.
+
+O código detecta isso sozinho (`hasIdentity` em `lib/abacate-processor.ts`). No dia em que
+as cobranças passarem a ser criadas com `customer` e `metadata.plan`, todas essas métricas
+ligam automaticamente, sem mudar código.
 
 ## Convivência com os registros manuais
 
@@ -41,28 +63,49 @@ fontes contaria o mesmo dinheiro duas vezes.
 
 A regra aplicada é um **corte por data**:
 
-- O arquivo manual gera receita apenas até o dia anterior ao primeiro pagamento real na Abacate.
-- Desse dia em diante a Abacate é a fonte da verdade.
-- Com o corte ativo, o arquivo manual para de contribuir com assinaturas ativas, ARR,
-  churn e mix de planos — essas métricas passam a vir 100% da Abacate.
-- Clientes que aparecem nas duas fontes são reconhecidos por nome normalizado
-  (sem acento, pontuação ou sufixo tipo LTDA/MEI) e não são contados de novo como
-  cliente novo no gráfico de crescimento.
+- O arquivo manual gera receita apenas até o dia anterior ao primeiro pagamento real na
+  Abacate — hoje 24/05/2026. Isso derruba a receita manual de R$ 21.257 para R$ 15.383,
+  exatamente o pedaço que a Abacate já cobre.
+- Desse dia em diante a Abacate é a fonte da verdade **para o dinheiro**.
+- Assinantes ativos, ARR, churn e mix de planos continuam saindo do arquivo manual, que
+  é a única fonte que tem essa informação (ver limitação acima). Não há duplicidade:
+  a Abacate contribui zero nessas métricas.
+- Se as cobranças passarem a identificar o cliente, clientes presentes nas duas fontes
+  são reconhecidos por nome normalizado (sem acento, pontuação ou sufixo tipo LTDA/MEI)
+  e não são contados de novo como cliente novo.
 
 O corte é automático: sai do próprio dado, sem data fixa no código. Se a Abacate ficar
 sem pagamentos, o corte some e o arquivo manual volta a valer sozinho.
 
-## Assinatura ativa vs. churn
+## Como ligar as métricas de cliente
 
-A Abacate não expõe objeto de assinatura para PIX transparente, então "ativo" é inferido:
-cliente com pagamento nos últimos **45 dias** conta como ativo; mais velho que isso conta
-como churn. A constante é `ACTIVE_WINDOW_DAYS` em `lib/abacate-processor.ts`.
+Ao criar a cobrança, mande `customer` e `metadata.plan`:
 
-## Plano do cliente
+```json
+POST /v2/transparents/create
+{
+  "method": "PIX",
+  "data": {
+    "amount": 18000,
+    "customer": { "name": "BRAVOS TRANSPORTES LTDA", "email": "...", "taxId": "..." },
+    "metadata": { "plan": "Plano Profissional" }
+  }
+}
+```
 
-O nome do plano sai, nesta ordem, de `metadata.plan` / `metadata.planType` / `metadata.plano`,
-depois da `description` da cobrança e, se nada existir, do rótulo genérico `PIX Abacate Pay`.
-Para o gráfico de receita por plano ficar detalhado, mande `metadata.plan` na hora de criar a cobrança.
+Com isso o dashboard passa a calcular, direto da Abacate: clientes novos por mês,
+assinantes ativos, churn, ARR e receita por plano. Enquanto isso não acontece, esses
+números refletem apenas as 10 assinaturas do arquivo manual e ficam abaixo da realidade.
+
+"Ativo" é inferido, já que o PIX transparente não tem objeto de assinatura: cliente com
+pagamento nos últimos **45 dias** conta como ativo. A constante é `ACTIVE_WINDOW_DAYS`
+em `lib/abacate-processor.ts`.
+
+## Detalhes da API
+
+- O header `Accept: application/json` é obrigatório; sem ele a v2 responde HTTP 400.
+- A API responde HTTP 400 genérico quando está sob throttle, mesmo com a requisição
+  correta. O cliente trata erro devolvendo vazio, então o dashboard não quebra.
 
 ## Arquivos
 
