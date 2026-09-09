@@ -17,12 +17,10 @@ import { MetricCard } from '@/components/dashboard/metric-card';
 import { MRRChart } from '@/components/dashboard/mrr-chart';
 import { GrowthChart } from '@/components/dashboard/growth-chart';
 import { OneOffRevenueChart } from '@/components/dashboard/one-off-revenue-chart';
+import { ReconciliationTable } from '@/components/dashboard/reconciliation-table';
 import { RevenuePieChart } from '@/components/dashboard/revenue-pie-chart';
 import { CustomerChart } from '@/components/dashboard/customer-chart';
-import { NetRevenueChart } from '@/components/dashboard/net-revenue-chart';
 import { DailyPayoutsChart } from '@/components/dashboard/daily-payouts-chart';
-import { SubscriptionRecordsTable } from '@/components/dashboard/subscription-records-table';
-import { FailedPaymentsTable } from '@/components/dashboard/failed-payments-table';
 import { formatCurrency, formatPercentage } from '@/lib/utils';
 import {
   MonthlyMRR,
@@ -300,18 +298,15 @@ export default function Home() {
       <div className="container mx-auto px-3 md:px-4 pb-4 md:pb-8">
         <Tabs defaultValue="revenue" className="w-full">
           <div className="overflow-x-auto -mx-3 md:mx-0 px-3 md:px-0 mb-4 md:mb-8">
-            <TabsList className="inline-flex lg:grid w-auto lg:w-full lg:grid-cols-4 min-w-max">
+            <TabsList className="inline-flex lg:grid w-auto lg:w-full lg:grid-cols-3 min-w-max">
               <TabsTrigger value="revenue" className="text-xs md:text-sm whitespace-nowrap px-3 md:px-4">
                 Receitas
-              </TabsTrigger>
-              <TabsTrigger value="financial" className="text-xs md:text-sm whitespace-nowrap px-3 md:px-4">
-                Financeiro
               </TabsTrigger>
               <TabsTrigger value="banking" className="text-xs md:text-sm whitespace-nowrap px-3 md:px-4">
                 Transferências
               </TabsTrigger>
-              <TabsTrigger value="records" className="text-xs md:text-sm whitespace-nowrap px-3 md:px-4">
-                Registros
+              <TabsTrigger value="reconciliation" className="text-xs md:text-sm whitespace-nowrap px-3 md:px-4">
+                Conciliação
               </TabsTrigger>
             </TabsList>
           </div>
@@ -338,64 +333,6 @@ export default function Home() {
           </TabsContent>
 
           {/* Aba 2: Detalhes Financeiros */}
-          <TabsContent value="financial" className="space-y-4 md:space-y-8">
-            <div>
-              <h3 className="text-lg md:text-xl font-semibold mb-3 md:mb-4">Métricas de Receita</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
-                <Card>
-                  <CardHeader className="px-3 md:px-6 py-3 md:py-4">
-                    <h4 className="text-xs md:text-sm font-medium text-muted-foreground uppercase">
-                      Receita Bruta
-                    </h4>
-                  </CardHeader>
-                  <CardContent className="px-3 md:px-6 pb-3 md:pb-6">
-                    <p className="text-xl md:text-2xl font-bold">
-                      {formatCurrency(data.financialMetrics.grossRevenue)}
-                    </p>
-                    <p className="text-[10px] md:text-xs text-muted-foreground mt-1">
-                      Total cobrado dos clientes
-                    </p>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="px-3 md:px-6 py-3 md:py-4">
-                    <h4 className="text-xs md:text-sm font-medium text-muted-foreground uppercase">
-                      Taxas de Processamento
-                    </h4>
-                  </CardHeader>
-                  <CardContent className="px-3 md:px-6 pb-3 md:pb-6">
-                    <p className="text-xl md:text-2xl font-bold">
-                      {formatCurrency(data.financialMetrics.stripeFees)}
-                    </p>
-                    <p className="text-[10px] md:text-xs text-muted-foreground mt-1">
-                      {data.financialMetrics.feePercentage.toFixed(2)}% taxa efetiva
-                    </p>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="px-3 md:px-6 py-3 md:py-4">
-                    <h4 className="text-xs md:text-sm font-medium text-muted-foreground uppercase">
-                      Receita Líquida
-                    </h4>
-                  </CardHeader>
-                  <CardContent className="px-3 md:px-6 pb-3 md:pb-6">
-                    <p className="text-xl md:text-2xl font-bold text-green-600">
-                      {formatCurrency(data.financialMetrics.netRevenue)}
-                    </p>
-                    <p className="text-[10px] md:text-xs text-muted-foreground mt-1">
-                      Após taxas do Stripe
-                    </p>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-
-            <NetRevenueChart data={data.monthlyFinancials} />
-          </TabsContent>
-
-          {/* Aba 3: Transferências Bancárias */}
           <TabsContent value="banking" className="space-y-4 md:space-y-8">
             <div>
               <h3 className="text-lg md:text-xl font-semibold mb-3 md:mb-4">Status de Transferências</h3>
@@ -454,49 +391,8 @@ export default function Home() {
           </TabsContent>
 
           {/* Aba 4: Registros e Inadimplência */}
-          <TabsContent value="records" className="space-y-4 md:space-y-8">
-            <div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 mb-4 md:mb-6">
-                <Card>
-                  <CardHeader className="px-3 md:px-6 py-3 md:py-4">
-                    <h4 className="text-xs md:text-sm font-medium text-muted-foreground uppercase">
-                      Total de Assinaturas Pagas
-                    </h4>
-                  </CardHeader>
-                  <CardContent className="px-3 md:px-6 pb-3 md:pb-6">
-                    <p className="text-xl md:text-2xl font-bold text-green-600">
-                      {data.subscriptionRecords.length}
-                    </p>
-                    <p className="text-[10px] md:text-xs text-muted-foreground mt-1">
-                      Últimos 12 meses
-                    </p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-red-200">
-                  <CardHeader className="px-3 md:px-6 py-3 md:py-4">
-                    <h4 className="text-xs md:text-sm font-medium text-muted-foreground uppercase">
-                      Pagamentos com Falha
-                    </h4>
-                  </CardHeader>
-                  <CardContent className="px-3 md:px-6 pb-3 md:pb-6">
-                    <p className="text-xl md:text-2xl font-bold text-red-600">
-                      {data.failedPayments.length}
-                    </p>
-                    <p className="text-[10px] md:text-xs text-muted-foreground mt-1">
-                      {data.failedPayments.length > 0 
-                        ? `${((data.failedPayments.length / (data.subscriptionRecords.length + data.failedPayments.length)) * 100).toFixed(1)}% taxa de falha`
-                        : 'Sem falhas no período'
-                      }
-                    </p>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <SubscriptionRecordsTable records={data.subscriptionRecords} />
-            </div>
-
-            <FailedPaymentsTable payments={data.failedPayments} />
+          <TabsContent value="reconciliation" className="space-y-4 md:space-y-8">
+            <ReconciliationTable />
           </TabsContent>
         </Tabs>
       </div>
