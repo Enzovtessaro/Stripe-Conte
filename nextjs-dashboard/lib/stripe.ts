@@ -113,6 +113,37 @@ export async function getCurrentBalance() {
   return await stripe.balance.retrieve();
 }
 
+// Faturas pagas de um mes especifico. A conciliacao precisa cruzar o Stripe
+// com o backoffice: uma fatura paga sem a linha correspondente em pix_payments
+// aparecia como "sem cobranca gerada" mesmo tendo sido paga.
+export async function getPaidInvoicesForMonth(month: number, year: number) {
+  const stripe = getStripeClient();
+  const gte = Math.floor(Date.UTC(year, month - 1, 1) / 1000);
+  const lt = Math.floor(Date.UTC(year, month, 1) / 1000);
+
+  const invoices: Stripe.Invoice[] = [];
+  let hasMore = true;
+  let startingAfter: string | undefined;
+
+  while (hasMore) {
+    const result = await stripe.invoices.list({
+      limit: 100,
+      status: 'paid',
+      created: { gte, lt },
+      starting_after: startingAfter,
+    });
+
+    invoices.push(...result.data);
+    hasMore = result.has_more;
+
+    if (hasMore && result.data.length > 0) {
+      startingAfter = result.data[result.data.length - 1].id;
+    }
+  }
+
+  return invoices;
+}
+
 export async function getInvoices(startDate?: Date) {
   const stripe = getStripeClient();
   const invoices: Stripe.Invoice[] = [];
