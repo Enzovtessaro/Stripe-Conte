@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
+import { SESSION_COOKIE } from '@/lib/session'
 
 export async function POST() {
   const response = NextResponse.json({ success: true })
   
   // Clear the authentication cookie
-  response.cookies.set('dashboard_auth', '', {
+  response.cookies.set(SESSION_COOKIE, '', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
@@ -14,7 +15,3 @@ export async function POST() {
 
   return response
 }
-
-
-
-
