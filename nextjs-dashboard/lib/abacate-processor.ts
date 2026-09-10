@@ -329,24 +329,8 @@ export function getAbacateMetrics(
     }
   }
 
-  // Certificado e pagamento anual: dilui em 12 meses a partir da compra, que e
-  // como um plano anual entra num MRR mensal sem virar um pico de um mes so.
-  for (const payment of payments) {
-    if (payment.identified) continue;
-
-    const monthly = payment.amount / MONTHS_PER_YEAR;
-    let cursor = startOfMonth(payment.paidAt);
-    const limit = startOfMonth(referenceDate);
-
-    for (let i = 0; i < MONTHS_PER_YEAR && cursor <= limit; i += 1) {
-      const key = format(cursor, MONTH_FORMAT);
-      const entry = monthMap.get(key) || { monthDate: cursor, newMRR: 0, existingMRR: 0 };
-      if (i === 0) entry.newMRR += monthly;
-      else entry.existingMRR += monthly;
-      monthMap.set(key, entry);
-      cursor = addMonths(cursor, 1);
-    }
-  }
+  // Certificado nao entra aqui: e receita avulsa e aparece em serie propria
+  // (oneOffMonthly). Diluir no MRR e somar na barra avulsa contaria duas vezes.
 
   const mrrData: MonthlyMRR[] = Array.from(monthMap.values())
     .map((entry) => {

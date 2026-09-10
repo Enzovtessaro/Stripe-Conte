@@ -14,11 +14,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MetricCard } from '@/components/dashboard/metric-card';
-import { MRRChart } from '@/components/dashboard/mrr-chart';
 import { GrowthChart } from '@/components/dashboard/growth-chart';
-import { OneOffRevenueChart } from '@/components/dashboard/one-off-revenue-chart';
+import { MonthlyRevenueChart } from '@/components/dashboard/monthly-revenue-chart';
 import { ReconciliationTable } from '@/components/dashboard/reconciliation-table';
-import { RevenuePieChart } from '@/components/dashboard/revenue-pie-chart';
 import { CustomerChart } from '@/components/dashboard/customer-chart';
 import { DailyPayoutsChart } from '@/components/dashboard/daily-payouts-chart';
 import { formatCurrency, formatPercentage } from '@/lib/utils';
@@ -179,6 +177,17 @@ export default function Home() {
   );
 
   // Calculate metrics from filtered data
+  // Receita mensal = assinaturas (MRR) + avulsa (certificados). As duas series
+  // saem de fontes diferentes e se juntam pelo rotulo do mes ("Sep 2026").
+  const oneOffByMonth = new Map(
+    (data.oneOffRevenue?.monthly ?? []).map((item) => [item.month, item.revenue])
+  );
+  const monthlyRevenue = filteredMRR.map((item) => ({
+    month: item.month,
+    subscriptions: item.totalMRR,
+    oneOff: oneOffByMonth.get(item.month) ?? 0,
+  }));
+
   // As duas fontes viraram run-rate: o Stripe soma o valor recorrente das
   // assinaturas ativas e o PIX soma o dos clientes ativos. O mes corrente fecha
   // sozinho, sem depender de quem ja pagou, entao os cartoes leem o mes atual.
@@ -313,23 +322,12 @@ export default function Home() {
 
           {/* Aba 1: Visão Geral de Receitas */}
           <TabsContent value="revenue" className="space-y-4 md:space-y-8">
+            <MonthlyRevenueChart data={monthlyRevenue} />
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-6">
-              <MRRChart data={filteredMRR} />
               <GrowthChart data={filteredMRR} />
-            </div>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-6">
-              <RevenuePieChart data={data.revenueByPlan} />
               <CustomerChart data={filteredCustomers} />
             </div>
-
-            {data.oneOffRevenue && data.oneOffRevenue.monthly.length > 0 && (
-              <OneOffRevenueChart
-                data={data.oneOffRevenue.monthly}
-                total={data.oneOffRevenue.total}
-                last12Months={data.oneOffRevenue.last12Months}
-              />
-            )}
           </TabsContent>
 
           {/* Aba 2: Detalhes Financeiros */}
