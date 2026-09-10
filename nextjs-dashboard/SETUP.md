@@ -39,6 +39,18 @@ STRIPE_SECRET_KEY=sk_test_51ABC...
 3. Click on **API keys**
 4. Copy your **Secret key** (it starts with `sk_test_` for test mode or `sk_live_` for live mode)
 
+### Abacate Pay (pagamentos PIX)
+
+Adicione tambem a chave da API v2 da Abacate Pay:
+
+```
+ABACATE_PAY_API_KEY=abc_live_...
+```
+
+A chave precisa das permissoes `CHECKOUT:READ` e `CUSTOMER:READ`, e sai do dashboard da
+Abacate em **Integracao > Chaves de API**. Sem ela o dashboard sobe normalmente, apenas
+sem os pagamentos PIX reais. Detalhes em [ABACATE-INTEGRATION.md](./ABACATE-INTEGRATION.md).
+
 **⚠️ Important:** Never commit your `.env.local` file to version control. It's already in `.gitignore`.
 
 ## Step 3: Run the Development Server

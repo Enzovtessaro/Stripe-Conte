@@ -36,13 +36,26 @@ export interface PixMetrics {
   monthlyFinancials: MonthlyFinancials[];
   financialMetrics: FinancialMetrics;
   subscriptionRecords: SubscriptionRecord[];
+  customerNames: string[];
 }
 
 const pixSubscriptions = pixSubscriptionsData as PixSubscription[];
 
 const MONTH_FORMAT = 'yyyy-MM';
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
+// `cutoffDate` is the first day Abacate Pay has real data for. Manual records only
+// synthesise payments up to the day before it, so the same money is never counted
+// twice. Current-state metrics (active subscriptions, ARR, churn, plan mix) stay
+// with this file: Abacate's charges carry no customer or plan, so it cannot
+// report them and there is nothing to double count.
+export function getPixMetrics(
+  referenceDate: Date = new Date(),
+  cutoffDate: Date | null = null
+): PixMetrics {
+  const lastSyntheticDate = cutoffDate
+    ? new Date(Math.min(cutoffDate.getTime() - DAY_IN_MS, referenceDate.getTime()))
+    : referenceDate;
   const monthMap = new Map<string, { monthDate: Date; newMRR: number; existingMRR: number }>();
   const customerMonthMap = new Map<string, number>();
   const planMap = new Map<string, number>();
@@ -83,7 +96,7 @@ export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
     let installmentNumber = 1;
     let paymentDate = new Date(startDate);
 
-    while (paymentDate <= referenceDate) {
+    while (paymentDate <= lastSyntheticDate) {
       grossRevenue += subscription.amount;
 
       const monthDate = startOfMonth(paymentDate);
@@ -106,7 +119,8 @@ export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
       monthlyFinancialMap.set(monthKey, monthlyEntry);
 
       const dayKey = format(paymentDate, 'yyyy-MM-dd');
-      const dailyEntry = dailyMap.get(dayKey) || { date: new Date(paymentDate), amount: 0, count: 0 };
+      const dailyEntry =
+        dailyMap.get(dayKey) || { date: new Date(`${dayKey}T00:00:00`), amount: 0, count: 0 };
       dailyEntry.amount += subscription.amount;
       dailyEntry.count += 1;
       dailyMap.set(dayKey, dailyEntry);
@@ -233,6 +247,7 @@ export function getPixMetrics(referenceDate: Date = new Date()): PixMetrics {
     monthlyFinancials,
     financialMetrics,
     subscriptionRecords: sortedSubscriptionRecords,
+    customerNames: pixSubscriptions.map((subscription) => subscription.customerName),
   };
 }
 

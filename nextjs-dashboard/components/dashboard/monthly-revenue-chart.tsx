@@ -2,42 +2,50 @@
 
 import { useState } from 'react';
 import {
-  BarChart,
   Bar,
-  XAxis,
-  YAxis,
+  BarChart,
   CartesianGrid,
-  Tooltip,
+  LabelList,
   Legend,
   ResponsiveContainer,
-  LabelList,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { MonthlyMRR } from '@/lib/data-processor';
 import { formatCurrency } from '@/lib/utils';
 
-interface MRRChartProps {
-  data: MonthlyMRR[];
+export interface MonthlyRevenue {
+  month: string;
+  subscriptions: number;
+  oneOff: number;
 }
 
-export function MRRChart({ data }: MRRChartProps) {
+interface MonthlyRevenueChartProps {
+  data: MonthlyRevenue[];
+}
+
+const SUBSCRIPTIONS = 'Receita de assinaturas';
+const ONE_OFF = 'Receita avulsa';
+
+export function MonthlyRevenueChart({ data }: MonthlyRevenueChartProps) {
   const [isHovering, setIsHovering] = useState(false);
 
   const chartData = data.map((item) => ({
     month: item.month,
-    'Novo MRR': item.newMRR,
-    'MRR Existente': item.existingMRR,
-    total: item.totalMRR,
+    [SUBSCRIPTIONS]: item.subscriptions,
+    [ONE_OFF]: item.oneOff,
+    total: item.subscriptions + item.oneOff,
   }));
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Receita Recorrente Mensal</CardTitle>
+        <CardTitle>Receita Mensal</CardTitle>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={400}>
-          <BarChart 
+          <BarChart
             data={chartData}
             onMouseEnter={() => setIsHovering(true)}
             onMouseLeave={() => setIsHovering(false)}
@@ -62,18 +70,15 @@ export function MRRChart({ data }: MRRChartProps) {
               }}
             />
             <Legend />
+            <Bar dataKey={SUBSCRIPTIONS} stackId="receita" fill="hsl(142, 76%, 36%)" />
             <Bar
-              dataKey="MRR Existente"
-              stackId="a"
-              fill="hsl(142, 76%, 36%)"
-              radius={[0, 0, 4, 4]}
-            />
-            <Bar
-              dataKey="Novo MRR"
-              stackId="a"
+              dataKey={ONE_OFF}
+              stackId="receita"
               fill="hsl(221, 83%, 53%)"
               radius={[4, 4, 0, 0]}
             >
+              {/* O total vai no topo da pilha. Some durante o hover para nao
+                  brigar com o tooltip. */}
               {!isHovering && (
                 <LabelList
                   dataKey="total"
@@ -89,4 +94,3 @@ export function MRRChart({ data }: MRRChartProps) {
     </Card>
   );
 }
-

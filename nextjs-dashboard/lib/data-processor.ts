@@ -7,6 +7,9 @@ export interface MonthlyMRR {
   newMRR: number;
   existingMRR: number;
   totalMRR: number;
+  // O mes corrente ainda esta sendo faturado: a parte de PIX conta o que ja
+  // entrou em caixa, entao o total so fecha quando o mes acaba.
+  isPartial?: boolean;
 }
 
 export interface CustomerTrend {
@@ -454,7 +457,7 @@ export class DataProcessor {
     // Convert to array and sort
     const results: DailyPayout[] = [];
     for (const [dateKey, data] of Array.from(dailyData.entries())) {
-      const dateObj = new Date(dateKey);
+      const dateObj = new Date(`${dateKey}T00:00:00`);
       results.push({
         date: format(dateObj, 'dd/MM/yyyy'),
         dateObj,
