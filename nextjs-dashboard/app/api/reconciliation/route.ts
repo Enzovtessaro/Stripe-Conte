@@ -166,13 +166,39 @@ async function reconcileWithStripe(
     if (!group) return false;
     if (group.length === 1) return true;
     const soma = group.reduce((sum, r) => sum + (r.amount ?? 0), 0);
-    return Math.abs(soma - stripeAmount) <= AMOUNT_TOLERANCE;
+    if (Math.abs(soma - stripeAmount) <= AMOUNT_TOLERANCE) return true;
+    // O backoffice as vezes grava a cobranca inteira numa empresa so do grupo
+    // (agosto/2026: Selbach Servicos com R$ 359, a irma sem fatia). A soma nao
+    // fecha, mas um membro carregando sozinho o valor cheio e o mesmo sinal de
+    // assinatura compartilhada.
+    return group.some((r) => Math.abs((r.amount ?? 0) - stripeAmount) <= AMOUNT_TOLERANCE);
   }
 
-  const reconciled = rows.map((row) => {
-    if (row.status === 'pago') return row;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const todayBrt = new Date((now - 3 * 60 * 60) * 1000).getUTCDate();
 
+  const reconciled = rows.map((row) => {
     const email = row.email?.trim().toLowerCase() ?? '';
+
+    // O cadastro pode apontar para um cliente Stripe antigo (Selbach), entao o
+    // email tambem vale como chave quando o grupo bate com o valor cobrado.
+    const sub =
+      (row.stripeCustomerId && coverage.byCustomer.get(row.stripeCustomerId)) ||
+      (() => {
+        const byEmail = coverage.byEmail.get(email);
+        return byEmail && grupoBateComValor(email, byEmail.amount) ? byEmail : undefined;
+      })() ||
+      undefined;
+
+    // Para quem paga no cartao, vencimento e o dia em que o Stripe cobra. O
+    // data_pagamento do cadastro fica so para PIX e para quem nao tem
+    // assinatura. Vale para todas as linhas, inclusive as ja pagas, para a
+    // coluna mostrar o mesmo dia em todo mes.
+    const stripeDueDay =
+      sub && row.method !== 'pix' ? Math.min(sub.billingDay, daysInMonth) : null;
+    const base = stripeDueDay !== null ? { ...row, dueDay: stripeDueDay } : row;
+
+    if (base.status === 'pago') return base;
 
     const paidMatch =
       (row.stripeCustomerId && paidByCustomerId.get(row.stripeCustomerId)) ||
@@ -183,37 +209,37 @@ async function reconcileWithStripe(
 
     if (paidMatch) {
       return {
-        ...row,
+        ...base,
         status: 'pago' as const,
         method: 'cartao' as const,
         paidAt: paidMatch.paidAt,
-        amount: row.amount || paidMatch.amount,
+        amount: base.amount || paidMatch.amount,
         missingBackofficeRecord: true,
       };
     }
 
-    // Assinatura ativa cujo ciclo ainda nao virou neste mes: a cobranca esta
-    // por vir, nao esta em atraso. O cadastro pode apontar para um cliente
-    // Stripe antigo (Selbach), entao o email tambem vale como chave.
-    const sub =
-      (row.stripeCustomerId && coverage.byCustomer.get(row.stripeCustomerId)) ||
-      (() => {
-        const byEmail = coverage.byEmail.get(email);
-        return byEmail && grupoBateComValor(email, byEmail.amount) ? byEmail : undefined;
-      })();
+    if (sub && stripeDueDay !== null) {
+      const subAtiva = sub.status === 'active' || sub.status === 'trialing';
 
-    const subAtiva = sub && (sub.status === 'active' || sub.status === 'trialing');
+      // O status tem que seguir o mesmo dia que a coluna mostra: antes (ou no)
+      // dia da cobranca do Stripe, esta aguardando — mesmo que o cadastro diga
+      // que ja venceu.
+      if (subAtiva && isCurrentMonth && todayBrt <= stripeDueDay) {
+        return {
+          ...base,
+          status: 'aguardando' as const,
+          method: 'cartao' as const,
+          nextChargeAt: new Date(Date.UTC(year, month - 1, stripeDueDay, 12)).toISOString(),
+        };
+      }
 
-    if (isCurrentMonth && subAtiva && sub.currentPeriodEnd > now) {
-      return {
-        ...row,
-        status: 'aguardando' as const,
-        method: 'cartao' as const,
-        nextChargeAt: new Date(sub.currentPeriodEnd * 1000).toISOString(),
-      };
+      // O Stripe tentou cobrar e nao conseguiu.
+      if (sub.status === 'past_due' || sub.status === 'unpaid') {
+        return { ...base, status: 'nao_pago' as const, method: 'cartao' as const };
+      }
     }
 
-    return row;
+    return base;
   });
 
   // Assinatura compartilhada: o backoffice registra o pagamento em UMA das

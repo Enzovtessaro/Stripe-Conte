@@ -163,6 +163,10 @@ export interface SubscriptionCoverage {
   currentPeriodEnd: number;
   amount: number;
   email: string | null;
+  // Dia do mes em que o Stripe cobra. E o vencimento real de quem paga no
+  // cartao — o data_pagamento do cadastro pode estar desatualizado (ANRN e RYN
+  // estao como dia 1 e o Stripe cobra dia 20).
+  billingDay: number;
 }
 
 export async function getSubscriptionCoverage() {
@@ -200,11 +204,19 @@ export async function getSubscriptionCoverage() {
       0
     );
 
+    // A ancora do ciclo define o dia de cobranca; current_period_end pode vir
+    // ajustado em mes curto (ancora 31 cai dia 28 em fevereiro). O dia e contado
+    // no horario de Brasilia, senao uma cobranca de madrugada UTC cairia no dia
+    // anterior.
+    const anchor = sub.billing_cycle_anchor ?? sub.current_period_end;
+    const billingDay = new Date((anchor - 3 * 60 * 60) * 1000).getUTCDate();
+
     const entry: SubscriptionCoverage = {
       status: sub.status,
       currentPeriodEnd: sub.current_period_end,
       amount,
       email: email?.trim().toLowerCase() ?? null,
+      billingDay,
     };
 
     // Entre varias, vale a que cobre mais para frente.
