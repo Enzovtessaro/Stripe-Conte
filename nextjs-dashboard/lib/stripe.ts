@@ -155,26 +155,74 @@ export async function getPaidInvoicesForCycleMonth(month: number, year: number) 
   });
 }
 
-// Assinaturas em vigor por cliente do Stripe: diz se a cobranca do ciclo ainda
-// esta por vir, o que separa "ainda nao venceu" de "nao pagou".
-export async function getSubscriptionCoverageByCustomer() {
-  const subscriptions = await getSubscriptions();
-  const coverage = new Map<string, { status: string; currentPeriodEnd: number }>();
+// Assinaturas em vigor, indexadas por cliente e por email. O email importa
+// porque uma assinatura pode cobrir mais de uma empresa do cadastro, e nesses
+// casos o stripe_customer_id do cadastro as vezes aponta para um cliente antigo.
+export interface SubscriptionCoverage {
+  status: string;
+  currentPeriodEnd: number;
+  amount: number;
+  email: string | null;
+}
 
-  for (const sub of subscriptions) {
-    const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
-    if (!customerId) continue;
+export async function getSubscriptionCoverage() {
+  const stripe = getStripeClient();
+  const subscriptions: Stripe.Subscription[] = [];
+  let hasMore = true;
+  let startingAfter: string | undefined;
 
-    const existing = coverage.get(customerId);
-    if (!existing || sub.current_period_end > existing.currentPeriodEnd) {
-      coverage.set(customerId, {
-        status: sub.status,
-        currentPeriodEnd: sub.current_period_end,
-      });
+  while (hasMore) {
+    const result = await stripe.subscriptions.list({
+      limit: 100,
+      starting_after: startingAfter,
+      expand: ['data.customer'],
+    });
+    subscriptions.push(...result.data);
+    hasMore = result.has_more;
+    if (hasMore && result.data.length > 0) {
+      startingAfter = result.data[result.data.length - 1].id;
     }
   }
 
-  return coverage;
+  const byCustomer = new Map<string, SubscriptionCoverage>();
+  const byEmail = new Map<string, SubscriptionCoverage>();
+
+  for (const sub of subscriptions) {
+    const customer = sub.customer;
+    const customerId = typeof customer === 'string' ? customer : customer?.id;
+    const email =
+      typeof customer === 'string'
+        ? null
+        : ((customer as Stripe.Customer)?.email ?? null);
+
+    const amount = sub.items.data.reduce(
+      (sum, item) => sum + ((item.price.unit_amount ?? 0) * (item.quantity ?? 1)) / 100,
+      0
+    );
+
+    const entry: SubscriptionCoverage = {
+      status: sub.status,
+      currentPeriodEnd: sub.current_period_end,
+      amount,
+      email: email?.trim().toLowerCase() ?? null,
+    };
+
+    // Entre varias, vale a que cobre mais para frente.
+    if (customerId) {
+      const existing = byCustomer.get(customerId);
+      if (!existing || entry.currentPeriodEnd > existing.currentPeriodEnd) {
+        byCustomer.set(customerId, entry);
+      }
+    }
+    if (entry.email) {
+      const existing = byEmail.get(entry.email);
+      if (!existing || entry.currentPeriodEnd > existing.currentPeriodEnd) {
+        byEmail.set(entry.email, entry);
+      }
+    }
+  }
+
+  return { byCustomer, byEmail };
 }
 
 export async function getInvoices(startDate?: Date) {
