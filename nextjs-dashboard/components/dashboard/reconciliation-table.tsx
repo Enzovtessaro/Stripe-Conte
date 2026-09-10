@@ -23,6 +23,10 @@ interface ReconciliationRow {
   dueDay: number | null;
   status: ReconciliationStatus;
   paidAt: string | null;
+  // Assinatura ativa cujo ciclo ainda nao virou: a data em que cobra.
+  nextChargeAt?: string | null;
+  // Coberta pela assinatura de outra empresa, no mesmo pagador.
+  sharedSubscriptionWith?: string | null;
 }
 
 interface ReconciliationSummary {
@@ -42,7 +46,7 @@ const brl = (value: number) =>
 // (venceu e nao foi nem gerada) e um problema diferente de cobranca em aberto.
 const STATUS_LABEL: Record<ReconciliationStatus, string> = {
   pago: 'Pago',
-  aguardando: 'Aguardando vencimento',
+  aguardando: 'Aguardando',
   nao_pago: 'Não pago',
   sem_cobranca: 'Sem cobrança gerada',
 };
@@ -235,7 +239,27 @@ export function ReconciliationTable() {
                       {row.dueDay ? `dia ${row.dueDay}` : '—'}
                     </td>
                     <td className="py-2 tabular-nums text-muted-foreground">
-                      {row.paidAt ? new Date(row.paidAt).toLocaleDateString('pt-BR') : '—'}
+                      {row.paidAt ? (
+                        <>
+                          {new Date(row.paidAt).toLocaleDateString('pt-BR')}
+                          {row.sharedSubscriptionWith && (
+                            <span
+                              className="block text-[10px] not-italic text-muted-foreground/80"
+                              title={`Assinatura compartilhada com ${row.sharedSubscriptionWith}`}
+                            >
+                              via {row.sharedSubscriptionWith}
+                            </span>
+                          )}
+                        </>
+                      ) : row.nextChargeAt ? (
+                        // Sem isso, "aguardando" parecia problema em vez de
+                        // cobranca marcada para uma data adiante.
+                        <span className="text-muted-foreground/80">
+                          cobra {new Date(row.nextChargeAt).toLocaleDateString('pt-BR')}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
                     </td>
                   </tr>
                 ))}
