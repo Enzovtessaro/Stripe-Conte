@@ -113,13 +113,20 @@ export async function getCurrentBalance() {
   return await stripe.balance.retrieve();
 }
 
-// Faturas pagas de um mes especifico. A conciliacao precisa cruzar o Stripe
-// com o backoffice: uma fatura paga sem a linha correspondente em pix_payments
-// aparecia como "sem cobranca gerada" mesmo tendo sido paga.
-export async function getPaidInvoicesForMonth(month: number, year: number) {
+// Faturas pagas do CICLO daquele mes: as que tem period_start dentro do mes.
+//
+// Nao serve olhar a data de criacao: assinatura do Stripe cobra em ciclo
+// proprio, uma fatura emitida em 20/08 pode ser o ciclo 20/08-20/09. Nem serve
+// olhar sobreposicao de periodo, que e o oposto — qualquer fatura de agosto
+// encosta em setembro e daria o mes por pago. O que identifica o pagamento
+// DAQUELE mes e o inicio do periodo cobrado.
+export async function getPaidInvoicesForCycleMonth(month: number, year: number) {
   const stripe = getStripeClient();
-  const gte = Math.floor(Date.UTC(year, month - 1, 1) / 1000);
-  const lt = Math.floor(Date.UTC(year, month, 1) / 1000);
+  const monthStart = Math.floor(Date.UTC(year, month - 1, 1) / 1000);
+  const monthEnd = Math.floor(Date.UTC(year, month, 1) / 1000);
+  // A fatura pode ser emitida alguns dias antes ou depois do inicio do ciclo.
+  const createdGte = monthStart - 10 * 24 * 60 * 60;
+  const createdLt = monthEnd + 10 * 24 * 60 * 60;
 
   const invoices: Stripe.Invoice[] = [];
   let hasMore = true;
@@ -129,7 +136,7 @@ export async function getPaidInvoicesForMonth(month: number, year: number) {
     const result = await stripe.invoices.list({
       limit: 100,
       status: 'paid',
-      created: { gte, lt },
+      created: { gte: createdGte, lt: createdLt },
       starting_after: startingAfter,
     });
 
@@ -141,7 +148,33 @@ export async function getPaidInvoicesForMonth(month: number, year: number) {
     }
   }
 
-  return invoices;
+  return invoices.filter((invoice) => {
+    const line = invoice.lines?.data?.[0]?.period;
+    const start = line?.start ?? invoice.period_start ?? invoice.created;
+    return start >= monthStart && start < monthEnd;
+  });
+}
+
+// Assinaturas em vigor por cliente do Stripe: diz se a cobranca do ciclo ainda
+// esta por vir, o que separa "ainda nao venceu" de "nao pagou".
+export async function getSubscriptionCoverageByCustomer() {
+  const subscriptions = await getSubscriptions();
+  const coverage = new Map<string, { status: string; currentPeriodEnd: number }>();
+
+  for (const sub of subscriptions) {
+    const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
+    if (!customerId) continue;
+
+    const existing = coverage.get(customerId);
+    if (!existing || sub.current_period_end > existing.currentPeriodEnd) {
+      coverage.set(customerId, {
+        status: sub.status,
+        currentPeriodEnd: sub.current_period_end,
+      });
+    }
+  }
+
+  return coverage;
 }
 
 export async function getInvoices(startDate?: Date) {

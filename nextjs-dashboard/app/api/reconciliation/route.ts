@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getPaidInvoicesForMonth } from '@/lib/stripe';
+import { getPaidInvoicesForCycleMonth, getSubscriptionCoverageByCustomer } from '@/lib/stripe';
 
 interface ReconciliationRow {
   clientId: string;
@@ -81,9 +81,13 @@ async function reconcileWithStripe(
     return payload;
   }
 
-  let invoices;
+  let invoices: Awaited<ReturnType<typeof getPaidInvoicesForCycleMonth>>;
+  let coverage: Awaited<ReturnType<typeof getSubscriptionCoverageByCustomer>>;
   try {
-    invoices = await getPaidInvoicesForMonth(month, year);
+    [invoices, coverage] = await Promise.all([
+      getPaidInvoicesForCycleMonth(month, year),
+      getSubscriptionCoverageByCustomer(),
+    ]);
   } catch (error) {
     // Sem o Stripe a conciliacao ainda vale pelo backoffice; so nao corrige.
     console.error('Reconciliation: could not read Stripe invoices:', error);
@@ -122,6 +126,11 @@ async function reconcileWithStripe(
     if (email) emailSeen.set(email, (emailSeen.get(email) ?? 0) + 1);
   }
 
+  const now = Math.floor(Date.now() / 1000);
+  const monthStart = Math.floor(Date.UTC(year, month - 1, 1) / 1000);
+  const monthEnd = Math.floor(Date.UTC(year, month, 1) / 1000);
+  const isCurrentMonth = now >= monthStart && now < monthEnd;
+
   const reconciled = rows.map((row) => {
     if (row.status === 'pago') return row;
 
@@ -130,18 +139,37 @@ async function reconcileWithStripe(
     // endereco pertence a um unico cliente.
     const match = (row.stripeCustomerId && paidByCustomerId.get(row.stripeCustomerId)) ||
       (!row.stripeCustomerId && emailSeen.get(email) === 1 ? paidByEmail.get(email) : undefined);
-    if (!match) return row;
 
-    return {
-      ...row,
-      status: 'pago' as const,
-      method: 'cartao' as const,
-      paidAt: match.paidAt,
-      amount: row.amount || match.amount,
-      // Pago no Stripe sem a linha do backoffice: o dinheiro entrou, o registro
-      // interno e que ficou faltando.
-      missingBackofficeRecord: true,
-    };
+    if (match) {
+      return {
+        ...row,
+        status: 'pago' as const,
+        method: 'cartao' as const,
+        paidAt: match.paidAt,
+        amount: row.amount || match.amount,
+        // Pago no Stripe sem a linha do backoffice: o dinheiro entrou, o
+        // registro interno e que ficou faltando.
+        missingBackofficeRecord: true,
+      };
+    }
+
+    // Assinatura ativa cujo ciclo ainda nao virou dentro deste mes: a cobranca
+    // esta por vir, nao esta em atraso. Duas empresas podem dividir uma
+    // assinatura so (Selbach, Nakamoto) e o ciclo dela cai no dia 23 e no 20 —
+    // sem isso as duas apareciam como "sem cobranca" no inicio do mes.
+    const sub = row.stripeCustomerId ? coverage.get(row.stripeCustomerId) : undefined;
+    const subAtiva = sub && (sub.status === 'active' || sub.status === 'trialing');
+
+    if (isCurrentMonth && subAtiva && sub.currentPeriodEnd > now) {
+      return {
+        ...row,
+        status: 'aguardando' as const,
+        method: 'cartao' as const,
+        nextChargeAt: new Date(sub.currentPeriodEnd * 1000).toISOString(),
+      };
+    }
+
+    return row;
   });
 
   const summary = {
