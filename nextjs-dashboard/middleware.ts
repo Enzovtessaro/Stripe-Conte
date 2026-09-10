@@ -1,25 +1,29 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { SESSION_COOKIE, verifySessionToken } from '@/lib/session'
 
-export function middleware(request: NextRequest) {
-  // Check if user is authenticated
-  const isAuthenticated = request.cookies.get('dashboard_auth')?.value === 'true'
-  
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+  const isAuthenticated = await verifySessionToken(request.cookies.get(SESSION_COOKIE)?.value)
+
   // Allow access to login page and auth API
-  if (request.nextUrl.pathname === '/login' || 
-      request.nextUrl.pathname.startsWith('/api/auth')) {
+  if (pathname === '/login' || pathname.startsWith('/api/auth')) {
     // If already authenticated and trying to access login, redirect to dashboard
-    if (isAuthenticated && request.nextUrl.pathname === '/login') {
+    if (isAuthenticated && pathname === '/login') {
       return NextResponse.redirect(new URL('/', request.url))
     }
     return NextResponse.next()
   }
-  
-  // Redirect to login if not authenticated
+
   if (!isAuthenticated) {
+    // API responde 401 em vez de redirecionar: um fetch seguiria o redirect e
+    // receberia o HTML da página de login como se fosse dado.
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
+    }
     return NextResponse.redirect(new URL('/login', request.url))
   }
-  
+
   return NextResponse.next()
 }
 
@@ -35,7 +39,3 @@ export const config = {
     '/((?!_next/static|_next/image|favicon.ico).*)',
   ],
 }
-
-
-
-

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { cookies } from 'next/headers'
+import {
+  SESSION_COOKIE,
+  SESSION_MAX_AGE_SECONDS,
+  createSessionToken,
+  safeEqual,
+} from '@/lib/session'
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,27 +20,33 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if password matches
-    if (password === correctPassword) {
-      // Set authentication cookie
-      const response = NextResponse.json({ success: true })
-      
-      // Set cookie with httpOnly flag for security
-      response.cookies.set('dashboard_auth', 'true', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 60 * 60 * 24 * 7, // 7 days
-        path: '/',
-      })
-
-      return response
-    } else {
+    if (typeof password !== 'string' || !(await safeEqual(password, correctPassword))) {
       return NextResponse.json(
         { error: 'Senha incorreta' },
         { status: 401 }
       )
     }
+
+    const token = await createSessionToken()
+
+    if (!token) {
+      return NextResponse.json(
+        { error: 'Configuração de senha não encontrada' },
+        { status: 500 }
+      )
+    }
+
+    const response = NextResponse.json({ success: true })
+
+    response.cookies.set(SESSION_COOKIE, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: SESSION_MAX_AGE_SECONDS,
+      path: '/',
+    })
+
+    return response
   } catch (error) {
     return NextResponse.json(
       { error: 'Erro ao processar requisição' },
@@ -43,7 +54,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-
-
-
-
